@@ -1,0 +1,17 @@
+#  Check active python environment with:
+#  python -c "import sys; print('prefix:', sys.prefix); print('base_prefix:', getattr(sys, 'base_prefix', getattr(sys, 'real_prefix', None))); print('In venv?', sys.prefix != getattr(sys, 'base_prefix', getattr(sys, 'real_prefix', None)))"
+#  If not in venv, create one with:
+#  python -m venv .venv_epl_data_project
+#  source .venv_epl_data_project/bin/activate
+
+pandas==2.0.3
+numpy==1.23.5
+requests==2.25.1
+lxml==4.9.3
+understatapi==0.6.1
+certifi==2020.12.5
+urllib3==1.26.5
+pyarrow==21.0.0
+statsmodels==0.14.3
+aiohttp==3.12.15
+underststat==0.1.2

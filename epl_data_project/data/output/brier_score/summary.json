@@ -1,0 +1,13 @@
+{
+  "n": 1906,
+  "K": 3,
+  "overall_raw": {
+    "brier": 0.491298,
+    "logloss": 0.839556,
+    "ece": 0.024074
+  },
+  "skill_raw": {
+    "skill_brier": 0.263053,
+    "skill_logloss": 0.235803
+  }
+}

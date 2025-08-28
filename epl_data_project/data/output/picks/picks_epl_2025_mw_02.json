@@ -1,0 +1,373 @@
+{
+  "generated_at_utc": "2025-08-21T20:29:36.595980+00:00",
+  "window_uk": {
+    "start": "2025-08-21T00:00:00+01:00",
+    "end": "2025-08-29T00:00:00+01:00"
+  },
+  "singles_count": 10,
+  "accas_count": 5,
+  "singles": [
+    {
+      "match_id": "a5cf7c410e8dc3375a7e72b5b99ee904",
+      "home_team": "Manchester City",
+      "away_team": "Tottenham Hotspur",
+      "kickoff_utc": "2025-08-23T11:30:00+00:00",
+      "kickoff_uk": "2025-08-23T12:30:00+01:00",
+      "market": "1X2",
+      "selection": "Away",
+      "model_prob": 0.6408166274456515,
+      "market_imp_prob": 0.1463339494762785,
+      "edge": 0.49448267796937295,
+      "kelly": 0.5788884597638673,
+      "best_odds": 6.8,
+      "best_bookmaker": "Smarkets",
+      "score": 3.3575530666304303
+    },
+    {
+      "match_id": "3910055b47bb7b3d2a03716c609d782a",
+      "home_team": "West Ham United",
+      "away_team": "Chelsea",
+      "kickoff_utc": "2025-08-22T19:00:00+00:00",
+      "kickoff_uk": "2025-08-22T20:00:00+01:00",
+      "market": "1X2",
+      "selection": "Home",
+      "model_prob": 0.44969342095001874,
+      "market_imp_prob": 0.18387556707712246,
+      "edge": 0.26581785387289625,
+      "kelly": 0.3246237438932048,
+      "best_odds": 5.4,
+      "best_bookmaker": "Betfair",
+      "score": 1.4283444731301014
+    },
+    {
+      "match_id": "ba2f41891888861179f3e6c08816ee0d",
+      "home_team": "Bournemouth",
+      "away_team": "Wolverhampton Wanderers",
+      "kickoff_utc": "2025-08-23T14:00:00+00:00",
+      "kickoff_uk": "2025-08-23T15:00:00+01:00",
+      "market": "1X2",
+      "selection": "Away",
+      "model_prob": 0.4830545723644552,
+      "market_imp_prob": 0.22192866578599732,
+      "edge": 0.2611259065784579,
+      "kelly": 0.33535587875429956,
+      "best_odds": 4.5,
+      "best_bookmaker": "Betfair",
+      "score": 1.1737455756400483
+    },
+    {
+      "match_id": "ba2f41891888861179f3e6c08816ee0d",
+      "home_team": "Bournemouth",
+      "away_team": "Wolverhampton Wanderers",
+      "kickoff_utc": "2025-08-23T14:00:00+00:00",
+      "kickoff_uk": "2025-08-23T15:00:00+01:00",
+      "market": "Totals 2.5",
+      "selection": "Under 2.5",
+      "model_prob": 0.6448381066439375,
+      "market_imp_prob": 0.4573643410852713,
+      "edge": 0.18747376555866618,
+      "kelly": 0.3219636581384261,
+      "best_odds": 2.1,
+      "best_bookmaker": "William Hill",
+      "score": 0.35416002395226887
+    },
+    {
+      "match_id": "ba2f41891888861179f3e6c08816ee0d",
+      "home_team": "Bournemouth",
+      "away_team": "Wolverhampton Wanderers",
+      "kickoff_utc": "2025-08-23T14:00:00+00:00",
+      "kickoff_uk": "2025-08-23T15:00:00+01:00",
+      "market": "BTTS",
+      "selection": "No",
+      "model_prob": 0.5971765366661201,
+      "market_imp_prob": 0.4371859296482412,
+      "edge": 0.15999060701787893,
+      "kelly": 0.2723189049452493,
+      "best_odds": 2.24,
+      "best_bookmaker": "Matchbook",
+      "score": 0.3376754421321093
+    },
+    {
+      "match_id": "a5cf7c410e8dc3375a7e72b5b99ee904",
+      "home_team": "Manchester City",
+      "away_team": "Tottenham Hotspur",
+      "kickoff_utc": "2025-08-23T11:30:00+00:00",
+      "kickoff_uk": "2025-08-23T12:30:00+01:00",
+      "market": "BTTS",
+      "selection": "No",
+      "model_prob": 0.5334624872906842,
+      "market_imp_prob": 0.40291262135922323,
+      "edge": 0.130549865931461,
+      "kelly": 0.2139162457089611,
+      "best_odds": 2.46,
+      "best_bookmaker": "Matchbook",
+      "score": 0.3123177187350832
+    },
+    {
+      "match_id": "3910055b47bb7b3d2a03716c609d782a",
+      "home_team": "West Ham United",
+      "away_team": "Chelsea",
+      "kickoff_utc": "2025-08-22T19:00:00+00:00",
+      "kickoff_uk": "2025-08-22T20:00:00+01:00",
+      "market": "Totals 2.5",
+      "selection": "Under 2.5",
+      "model_prob": 0.5610399989655066,
+      "market_imp_prob": 0.4356435643564356,
+      "edge": 0.12539643460907102,
+      "kelly": 0.21810249815730853,
+      "best_odds": 2.28,
+      "best_bookmaker": "Matchbook",
+      "score": 0.2791711976413549
+    },
+    {
+      "match_id": "a5cf7c410e8dc3375a7e72b5b99ee904",
+      "home_team": "Manchester City",
+      "away_team": "Tottenham Hotspur",
+      "kickoff_utc": "2025-08-23T11:30:00+00:00",
+      "kickoff_uk": "2025-08-23T12:30:00+01:00",
+      "market": "Totals 2.5",
+      "selection": "Under 2.5",
+      "model_prob": 0.485528295825167,
+      "market_imp_prob": 0.35467980295566504,
+      "edge": 0.13084849286950195,
+      "kelly": 0.16795316979131944,
+      "best_odds": 2.62,
+      "best_bookmaker": "William Hill",
+      "score": 0.2720841350619376
+    },
+    {
+      "match_id": "4470a3f0bf4871889875effd378cccb4",
+      "home_team": "Brentford",
+      "away_team": "Aston Villa",
+      "kickoff_utc": "2025-08-23T14:00:00+00:00",
+      "kickoff_uk": "2025-08-23T15:00:00+01:00",
+      "market": "BTTS",
+      "selection": "No",
+      "model_prob": 0.533193531878617,
+      "market_imp_prob": 0.4222222222222223,
+      "edge": 0.11097130965639468,
+      "kelly": 0.18483049596713705,
+      "best_odds": 2.34,
+      "best_bookmaker": "Matchbook",
+      "score": 0.2476728645959636
+    },
+    {
+      "match_id": "a5cf7c410e8dc3375a7e72b5b99ee904",
+      "home_team": "Manchester City",
+      "away_team": "Tottenham Hotspur",
+      "kickoff_utc": "2025-08-23T11:30:00+00:00",
+      "kickoff_uk": "2025-08-23T12:30:00+01:00",
+      "market": "Totals 3.5",
+      "selection": "Under 3.5",
+      "model_prob": 0.7067608735738358,
+      "market_imp_prob": 0.5679012345679013,
+      "edge": 0.13885963900593445,
+      "kelly": 0.31577537167228353,
+      "best_odds": 1.75,
+      "best_bookmaker": "Matchbook",
+      "score": 0.23683152875421265
+    }
+  ],
+  "accas": [
+    {
+      "legs_count": 4,
+      "acca_prob": 0.07422178171668208,
+      "acca_odds": 386.66159999999996,
+      "score": 27.698712873423034,
+      "legs": [
+        {
+          "home_team": "West Ham United",
+          "away_team": "Chelsea",
+          "kickoff_uk": "2025-08-22T20:00:00+01:00",
+          "market": "1X2",
+          "selection": "Home",
+          "odds": 5.4,
+          "p": 0.44969342095001874,
+          "bookmaker": "Betfair"
+        },
+        {
+          "home_team": "Brentford",
+          "away_team": "Aston Villa",
+          "kickoff_uk": "2025-08-23T15:00:00+01:00",
+          "market": "BTTS",
+          "selection": "No",
+          "odds": 2.34,
+          "p": 0.533193531878617,
+          "bookmaker": "Matchbook"
+        },
+        {
+          "home_team": "Manchester City",
+          "away_team": "Tottenham Hotspur",
+          "kickoff_uk": "2025-08-23T12:30:00+01:00",
+          "market": "1X2",
+          "selection": "Away",
+          "odds": 6.8,
+          "p": 0.6408166274456515,
+          "bookmaker": "Smarkets"
+        },
+        {
+          "home_team": "Bournemouth",
+          "away_team": "Wolverhampton Wanderers",
+          "kickoff_uk": "2025-08-23T15:00:00+01:00",
+          "market": "1X2",
+          "selection": "Away",
+          "odds": 4.5,
+          "p": 0.4830545723644552,
+          "bookmaker": "Betfair"
+        }
+      ]
+    },
+    {
+      "legs_count": 3,
+      "acca_prob": 0.13920232950908878,
+      "acca_odds": 165.24,
+      "score": 22.001792928081834,
+      "legs": [
+        {
+          "home_team": "West Ham United",
+          "away_team": "Chelsea",
+          "kickoff_uk": "2025-08-22T20:00:00+01:00",
+          "market": "1X2",
+          "selection": "Home",
+          "odds": 5.4,
+          "p": 0.44969342095001874,
+          "bookmaker": "Betfair"
+        },
+        {
+          "home_team": "Manchester City",
+          "away_team": "Tottenham Hotspur",
+          "kickoff_uk": "2025-08-23T12:30:00+01:00",
+          "market": "1X2",
+          "selection": "Away",
+          "odds": 6.8,
+          "p": 0.6408166274456515,
+          "bookmaker": "Smarkets"
+        },
+        {
+          "home_team": "Bournemouth",
+          "away_team": "Wolverhampton Wanderers",
+          "kickoff_uk": "2025-08-23T15:00:00+01:00",
+          "market": "1X2",
+          "selection": "Away",
+          "odds": 4.5,
+          "p": 0.4830545723644552,
+          "bookmaker": "Betfair"
+        }
+      ]
+    },
+    {
+      "legs_count": 3,
+      "acca_prob": 0.15365092468410213,
+      "acca_odds": 85.92479999999999,
+      "score": 12.202424973296537,
+      "legs": [
+        {
+          "home_team": "West Ham United",
+          "away_team": "Chelsea",
+          "kickoff_uk": "2025-08-22T20:00:00+01:00",
+          "market": "1X2",
+          "selection": "Home",
+          "odds": 5.4,
+          "p": 0.44969342095001874,
+          "bookmaker": "Betfair"
+        },
+        {
+          "home_team": "Brentford",
+          "away_team": "Aston Villa",
+          "kickoff_uk": "2025-08-23T15:00:00+01:00",
+          "market": "BTTS",
+          "selection": "No",
+          "odds": 2.34,
+          "p": 0.533193531878617,
+          "bookmaker": "Matchbook"
+        },
+        {
+          "home_team": "Manchester City",
+          "away_team": "Tottenham Hotspur",
+          "kickoff_uk": "2025-08-23T12:30:00+01:00",
+          "market": "1X2",
+          "selection": "Away",
+          "odds": 6.8,
+          "p": 0.6408166274456515,
+          "bookmaker": "Smarkets"
+        }
+      ]
+    },
+    {
+      "legs_count": 3,
+      "acca_prob": 0.16504973890852512,
+      "acca_odds": 71.604,
+      "score": 10.818221504806033,
+      "legs": [
+        {
+          "home_team": "Brentford",
+          "away_team": "Aston Villa",
+          "kickoff_uk": "2025-08-23T15:00:00+01:00",
+          "market": "BTTS",
+          "selection": "No",
+          "odds": 2.34,
+          "p": 0.533193531878617,
+          "bookmaker": "Matchbook"
+        },
+        {
+          "home_team": "Manchester City",
+          "away_team": "Tottenham Hotspur",
+          "kickoff_uk": "2025-08-23T12:30:00+01:00",
+          "market": "1X2",
+          "selection": "Away",
+          "odds": 6.8,
+          "p": 0.6408166274456515,
+          "bookmaker": "Smarkets"
+        },
+        {
+          "home_team": "Bournemouth",
+          "away_team": "Wolverhampton Wanderers",
+          "kickoff_uk": "2025-08-23T15:00:00+01:00",
+          "market": "1X2",
+          "selection": "Away",
+          "odds": 4.5,
+          "p": 0.4830545723644552,
+          "bookmaker": "Betfair"
+        }
+      ]
+    },
+    {
+      "legs_count": 3,
+      "acca_prob": 0.11582374510557925,
+      "acca_odds": 56.861999999999995,
+      "score": 5.5859697941934465,
+      "legs": [
+        {
+          "home_team": "West Ham United",
+          "away_team": "Chelsea",
+          "kickoff_uk": "2025-08-22T20:00:00+01:00",
+          "market": "1X2",
+          "selection": "Home",
+          "odds": 5.4,
+          "p": 0.44969342095001874,
+          "bookmaker": "Betfair"
+        },
+        {
+          "home_team": "Brentford",
+          "away_team": "Aston Villa",
+          "kickoff_uk": "2025-08-23T15:00:00+01:00",
+          "market": "BTTS",
+          "selection": "No",
+          "odds": 2.34,
+          "p": 0.533193531878617,
+          "bookmaker": "Matchbook"
+        },
+        {
+          "home_team": "Bournemouth",
+          "away_team": "Wolverhampton Wanderers",
+          "kickoff_uk": "2025-08-23T15:00:00+01:00",
+          "market": "1X2",
+          "selection": "Away",
+          "odds": 4.5,
+          "p": 0.4830545723644552,
+          "bookmaker": "Betfair"
+        }
+      ]
+    }
+  ]
+}
