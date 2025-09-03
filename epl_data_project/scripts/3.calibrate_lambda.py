@@ -32,7 +32,7 @@ def parse_args():
                     help="Path to all_shots.parquet")
     ap.add_argument("--players", default="../data/raw/player_stats/understat_epl_players_since2020.parquet",
                     help="Path to understat player parquet")
-    ap.add_argument("--out", default="../data/callibrated/team_match_lambdas.parquet",
+    ap.add_argument("--out", default="../data/calibrated/team_match_lambdas.parquet",
                     help="Output parquet for per-team lambdas")
     ap.add_argument("--alpha", type=float, default=1.0,
                     help="Ridge strength for fit_regularized (full model)")

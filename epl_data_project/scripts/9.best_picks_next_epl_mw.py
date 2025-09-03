@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-# 9.picks_next7.py
+# 9.best_picks_next_epl_mw.py
 # Top 10 single picks + Top 5 accas for the next 7 days (UK time)
 # Inputs (defaults):
 #   ../data/raw/odds/odds.parquet
-#   ../data/callibrated/market_prices.parquet       (optional λ for future fixtures)
-#   ../data/callibrated/team_match_lambdas.parquet  (fallback λ ratings from history)
+#   ../data/calibrated/market_prices.parquet       (optional λ for future fixtures)
+#   ../data/calibrated/team_match_lambdas.parquet  (fallback λ ratings from history)
 # Output:
 #   ../data/output/picks/picks_next_epl_<season>_mw<NN>.json
 
@@ -15,9 +15,9 @@ import numpy as np
 import pandas as pd
 
 # -------- paths / settings --------
-PRICES_PARQUET = Path("../data/callibrated/market_prices.parquet")
-ODDS_PARQUET   = Path("../data/raw/odds/odds.parquet")
-LAMBDAS_PARQ   = Path("../data/callibrated/team_match_lambdas.parquet")
+PRICES_PARQUET = Path("../data/calibrated/market_prices_epl_2025_mw03.parquet")
+ODDS_PARQUET   = Path("../data/raw/odds/epl_odds_2025_MW03.parquet")
+LAMBDAS_PARQ   = Path("../data/calibrated/team_match_lambdas.parquet")
 OUT_DIR        = Path("../data/output/picks")  # dynamic filename written here
 
 DAYS_LOOKAHEAD = 7
@@ -281,7 +281,8 @@ def main():
             raise RuntimeError("No λ for upcoming fixtures (market_prices absent/empty; no team_match_lambdas fallback).")
         lam_hist = pd.read_parquet(LAMBDAS_PARQ).copy()
         team_att, team_def, hfa, c = build_team_ratings(lam_hist)
-        model = predict_lambdas(fixtures[{"match_id","home_key","away_key"}], team_att, team_def, hfa, c) \
+        # -------- FIXED LINE: use a LIST, not a set, for column selection --------
+        model = predict_lambdas(fixtures[["match_id","home_key","away_key"]], team_att, team_def, hfa, c) \
                   .merge(fixtures.drop(columns=["home_key","away_key"]), on="match_id", how="left")
 
     # DIAG & ensure names/KO

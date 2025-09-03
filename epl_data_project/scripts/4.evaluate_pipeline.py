@@ -1,30 +1,22 @@
 #!/usr/bin/env python3
 """
-Football Prediction Evaluation Pipeline — compact summary, NA-safe, schema-tolerant
-===================================================================================
+Football Prediction Evaluation Pipeline — auto names (season + NEXT MW)
+======================================================================
 
-This script evaluates football probability forecasts produced as per-team attack
-rates ("lambdas") stored in a parquet like `team_match_lambdas.parquet`.
+Reads per-team lambdas (parquet) → builds per-match Poisson 1X2 → evaluates
+historical rows (Brier, LogLoss, ECE). Output filenames are *automatically*
+stamped with <season> and the **next** matchweek inferred from dates (UK).
 
-Key improvements vs. older versions:
-- Robustly infers home/away rows per match (accepts `home`, `is_home`, etc.).
-- Handles `date` as epoch ms *or* timezone-aware datetime.
-- Avoids `np.isnan(pd.NA)` errors; uses `pd.isna` everywhere.
-- Produces compact `summary.json` by default (segments go to CSV files).
-- Skill excludes ECE by default (only Brier & LogLoss), to avoid nonsense values.
-- CLI toggles to re-include segments in JSON or add ECE skill if you want.
-
-Outputs (default outdir: `eval_report/`):
-- `summary.json` — overall metrics + (optionally) a small sample of segments
-- `segments_raw.csv` — by-segment metrics (using raw probs)
-- `segments_calibrated.csv` — by-segment metrics (post-calibration, if enabled)
-
-Run (most common):
+Run (no args needed):
     python 4.evaluate_pipeline.py
-    # reads data/team_match_lambdas.parquet, writes to eval_report/
 
-Include segment table inside JSON (capped to 50 rows by default):
-    python 4.evaluate_pipeline.py --include-segments-in-json
+Defaults:
+- input parquet : ../data/calibrated/team_match_lambdas.parquet
+- out directory : ../data/output/evaluated
+- calibration   : off (use --calibrate multinomial to add in-script diagnostic calibration)
+
+If you prefer manual override, you can still pass:
+  --season 2025  --mw 03
 """
 from __future__ import annotations
 
@@ -39,26 +31,87 @@ import numpy as np
 import pandas as pd
 from pandas.api.types import is_numeric_dtype, is_datetime64_any_dtype
 
-# Optional sklearn pieces for calibration
+# Optional sklearn for in-script calibration
 try:
-    from sklearn.linear_model import LogisticRegression
+    from sklearn.linear_model import LogisticRegression  # type: ignore
 except Exception:  # pragma: no cover
     LogisticRegression = None  # type: ignore
 
 EPS = 1e-15
 RESULT_MAP = {"H": 0, "D": 1, "A": 2}
-INV_RESULT_MAP = {v: k for k, v in RESULT_MAP.items()}
 
 # ----------------------------
-# Utility / scoring functions
+# Date & naming helpers (UK)
 # ----------------------------
+def _season_year_now_uk() -> int:
+    d = pd.Timestamp.now(tz="Europe/London").date()
+    return d.year if d.month >= 8 else d.year - 1
 
+def _to_uk(ts) -> pd.Timestamp:
+    t = pd.to_datetime(ts, utc=True, errors="coerce")
+    return t.tz_convert("Europe/London")
+
+def _monday_of_week(d: pd.Timestamp | pd.Timestamp.date) -> pd.Timestamp.date:
+    if isinstance(d, pd.Timestamp):
+        d = d.date()
+    return d - pd.Timedelta(days=pd.Timestamp(d).weekday())
+
+def _season_year_for_date_uk(d: pd.Timestamp | pd.Timestamp.date) -> int:
+    if isinstance(d, pd.Timestamp):
+        d = d.tz_convert("Europe/London").date()
+    return d.year if d.month >= 8 else d.year - 1
+
+def _season_start_monday(season_year: int) -> pd.Timestamp.date:
+    aug1 = pd.Timestamp(year=season_year, month=8, day=1).date()
+    offset = (7 - pd.Timestamp(aug1).weekday()) % 7
+    return aug1 + pd.Timedelta(days=offset)
+
+def _mw_for_date_uk(dt_uk: pd.Timestamp) -> Tuple[int, int]:
+    """Return (season_year, mw>=1) for a single UK datetime."""
+    d = dt_uk.date()
+    season = _season_year_for_date_uk(dt_uk)
+    s0 = _season_start_monday(season)
+    mw = int((( _monday_of_week(d) - s0).days // 7) + 1)
+    return season, max(1, mw)
+
+def infer_next_mw_and_season(match_df: pd.DataFrame) -> Tuple[int, int]:
+    """
+    Infer <season, NEXT mw> from match_df dates (UK):
+      - If future matches exist (no goals), use the earliest upcoming kickoff date.
+      - Else use last historical date's mw + 1 (capped to 38).
+    """
+    if match_df.empty:
+        return _season_year_now_uk(), 1
+
+    # UK times
+    kt = pd.to_datetime(match_df["kickoff_time"], utc=True, errors="coerce").dt.tz_convert("Europe/London")
+    df = match_df.copy()
+    df["kt_uk"] = kt
+
+    # Split historical vs upcoming
+    hist = df[df["home_goals"].notna() & df["away_goals"].notna()]
+    upc  = df[~(df["home_goals"].notna() & df["away_goals"].notna())]
+
+    if not upc.empty:
+        ref = upc["kt_uk"].min()
+        season, mw = _mw_for_date_uk(ref)
+        return season, min(38, max(1, mw))
+    elif not hist.empty:
+        last_dt = hist["kt_uk"].max()
+        season, mw = _mw_for_date_uk(last_dt)
+        return season, min(38, max(1, mw + 1))
+    else:
+        # No clear signals; fall back to current UK season
+        return _season_year_now_uk(), 1
+
+# ----------------------------
+# Scoring utilities
+# ----------------------------
 def _one_hot(y: np.ndarray, K: int) -> np.ndarray:
     y = y.astype(int)
     out = np.zeros((y.shape[0], K), dtype=float)
     out[np.arange(y.shape[0]), y] = 1.0
     return out
-
 
 def _clamp_probs(p: np.ndarray, eps: float = EPS) -> np.ndarray:
     p = np.clip(p, eps, 1 - eps)
@@ -66,17 +119,14 @@ def _clamp_probs(p: np.ndarray, eps: float = EPS) -> np.ndarray:
     s[s == 0] = 1.0
     return p / s
 
-
 def brier_multiclass(y_true: np.ndarray, p: np.ndarray) -> float:
     K = p.shape[1]
     oh = _one_hot(y_true, K)
     return float(np.mean(np.sum((p - oh) ** 2, axis=1)))
 
-
 def logloss_multiclass(y_true: np.ndarray, p: np.ndarray) -> float:
     p = _clamp_probs(p)
     return float(-np.mean(np.log(p[np.arange(len(y_true)), y_true])))
-
 
 def ece_maxprob(y_true: np.ndarray, p: np.ndarray, n_bins: int = 10) -> float:
     conf = p.max(axis=1)
@@ -93,22 +143,19 @@ def ece_maxprob(y_true: np.ndarray, p: np.ndarray, n_bins: int = 10) -> float:
         ece += (np.sum(m) / n) * abs(acc - avg_conf)
     return float(ece)
 
-
 # ----------------------------
-# Poisson conversion utilities
+# Poisson conversion
 # ----------------------------
-
 def _poisson_pmf(lam: float, max_g: int) -> np.ndarray:
     g = np.arange(0, max_g + 1)
     pmf = np.zeros_like(g, dtype=float)
     pmf[0] = math.exp(-lam)
     for i in range(1, len(g)):
         pmf[i] = pmf[i - 1] * lam / i
-    pmf_sum = pmf.sum()
-    if pmf_sum > 0:
-        pmf /= pmf_sum
+    s = pmf.sum()
+    if s > 0:
+        pmf /= s
     return pmf
-
 
 def poisson_1x2(lambda_home: float, lambda_away: float, max_goals: int = 12) -> Tuple[float, float, float]:
     ph = _poisson_pmf(lambda_home, max_goals)
@@ -122,36 +169,29 @@ def poisson_1x2(lambda_home: float, lambda_away: float, max_goals: int = 12) -> 
         return 1/3, 1/3, 1/3
     return p_H / s, p_D / s, p_A / s
 
-
 # ----------------------------
-# Data building from lambdas
+# Build per-match from team lambdas
 # ----------------------------
-
 def build_from_team_lambdas(parquet_path: str, max_goals: int = 12) -> pd.DataFrame:
     """
-    Build a per-match DataFrame from a per-team parquet.
-
-    Expected input columns include at least: match_id, date, team, opp, home (or is_home),
-    goals (optional for future matches), and a lambda column (e.g. `lambda_glm`).
+    Expected input (per-team rows): match_id, date, team, opp, home/is_home/etc, goals (optional),
+    and at least one lambda* column (e.g. lambda_glm).
     """
     df = pd.read_parquet(parquet_path).copy()
 
-    # --- Normalize kickoff_time from `date` (epoch ms OR tz-aware/naive datetime or strings) ---
+    # kickoff_time from `date` (epoch ms OR datetime OR string)
     if "date" not in df.columns:
         raise KeyError("Missing 'date' column in lambdas parquet")
 
     s = df["date"]
     if is_numeric_dtype(s):
-        # epoch milliseconds
         df["kickoff_time"] = pd.to_datetime(s, unit="ms", utc=True)
     elif is_datetime64_any_dtype(s):
-        # datetime; utc=True will localize naive or convert aware to UTC
         df["kickoff_time"] = pd.to_datetime(s, utc=True)
     else:
-        # strings or mixed: parse and coerce failures to NaT
         df["kickoff_time"] = pd.to_datetime(s, utc=True, errors="coerce")
 
-    # --- Pick the lambda column ---
+    # find lambda column
     cand_lcols = [c for c in df.columns if "lambda" in c.lower()]
     if not cand_lcols:
         raise KeyError("No lambda* column found (e.g. 'lambda_glm')")
@@ -162,14 +202,10 @@ def build_from_team_lambdas(parquet_path: str, max_goals: int = 12) -> pd.DataFr
         if cand_cols:
             c = cand_cols[0]
             vals = grp[c].astype(str).str.lower().str.strip()
-            # Try robust mapping to bool
             is_home = vals.isin(["1", "true", "t", "yes", "y", "home", "h"])
             if is_home.sum() == 1:
-                home_row = grp.loc[is_home].iloc[0]
-                away_row = grp.loc[~is_home].iloc[0]
-                return home_row, away_row
-        # Fallback: deterministic order
-        return grp.iloc[0], grp.iloc[1]
+                return grp.loc[is_home].iloc[0], grp.loc[~is_home].iloc[0]
+        return grp.iloc[0], grp.iloc[1]  # deterministic fallback
 
     rows: List[Dict] = []
     for mid, grp in df.groupby("match_id", sort=False):
@@ -177,24 +213,19 @@ def build_from_team_lambdas(parquet_path: str, max_goals: int = 12) -> pd.DataFr
             continue
         home_row, away_row = _get_home_away_rows(grp)
 
-        hl = home_row.get(lcol, pd.NA)
-        al = away_row.get(lcol, pd.NA)
-        hl = float(hl) if not pd.isna(hl) else np.nan
-        al = float(al) if not pd.isna(al) else np.nan
+        hl = float(home_row.get(lcol)) if not pd.isna(home_row.get(lcol)) else np.nan
+        al = float(away_row.get(lcol)) if not pd.isna(away_row.get(lcol)) else np.nan
 
-        # Compute Poisson 1X2 if both lambdas available
         if not pd.isna(hl) and not pd.isna(al):
             p_H, p_D, p_A = poisson_1x2(hl, al, max_goals=max_goals)
         else:
-            p_H, p_D, p_A = np.nan, np.nan, np.nan
+            p_H = p_D = p_A = np.nan
 
-        # Goals if present (historical matches)
         hg = home_row.get("goals", pd.NA)
         ag = away_row.get("goals", pd.NA)
         hg = None if pd.isna(hg) else int(hg)
         ag = None if pd.isna(ag) else int(ag)
 
-        # Result label if goals available
         if hg is not None and ag is not None:
             res = "H" if hg > ag else ("D" if hg == ag else "A")
         else:
@@ -220,11 +251,9 @@ def build_from_team_lambdas(parquet_path: str, max_goals: int = 12) -> pd.DataFr
     match_df["is_historical"] = match_df["home_goals"].notna() & match_df["away_goals"].notna()
     return match_df
 
-
 # ----------------------------
-# Configuration & evaluator
+# Evaluator
 # ----------------------------
-
 @dataclass
 class EvalConfig:
     K: int = 3
@@ -235,7 +264,6 @@ class EvalConfig:
     max_segments: Optional[int] = 50
     summary_precision: int = 6
     include_ece_in_skill: bool = False
-
 
 class Evaluator:
     def __init__(self, y: np.ndarray, P_raw: np.ndarray, cfg: EvalConfig):
@@ -256,7 +284,6 @@ class Evaluator:
             return _clamp_probs(lr.predict_proba(X))
         return None
 
-    # --- metrics ---
     def _metrics(self, y: np.ndarray, P: np.ndarray) -> Dict[str, float]:
         return {
             "brier": brier_multiclass(y, P),
@@ -307,8 +334,8 @@ class Evaluator:
 
         # Baseline: uniform
         K = self.P_raw.shape[1]
-        baseline = np.full_like(self.P_raw, 1.0 / K)
-        base_metrics = self._metrics(self.y, baseline)
+        base = np.full_like(self.P_raw, 1.0 / K)
+        base_metrics = self._metrics(self.y, base)
 
         result: Dict = {
             "n": int(len(self.y)),
@@ -320,10 +347,10 @@ class Evaluator:
             result["overall_calibrated"] = overall_cal
             result["skill_calibrated"] = self._skill_scores(base_metrics, overall_cal)
 
-        # Segments
+        # Segments (kept out of JSON by default; always available for CSV)
         if groups is not None and not groups.empty:
             seg_raw = self._segment_metrics(self.y, self.P_raw, groups)
-            result["_segments_raw_df"] = seg_raw  # keep for CSV
+            result["_segments_raw_df"] = seg_raw
             if P_cal is not None:
                 seg_cal = self._segment_metrics(self.y, P_cal, groups)
                 result["_segments_cal_df"] = seg_cal
@@ -332,7 +359,7 @@ class Evaluator:
                 if P_cal is not None:
                     result["by_segment_calibrated"] = seg_cal.to_dict(orient="records")
 
-        # Final rounding for JSON (excluding private keys)
+        # Round floats for JSON (exclude private keys)
         def _round_vals(obj):
             if isinstance(obj, dict):
                 return {k: _round_vals(v) for k, v in obj.items() if not k.startswith("_")}
@@ -344,85 +371,50 @@ class Evaluator:
 
         return _round_vals(result)
 
-
 # ----------------------------
 # I/O helpers
 # ----------------------------
-
 def _ensure_dir(path: str) -> None:
     os.makedirs(path, exist_ok=True)
-
 
 def _write_json(path: str, data: Dict) -> None:
     with open(path, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
 
-
 def _maybe_write_csv(df: Optional[pd.DataFrame], path: str) -> None:
     if df is not None and isinstance(df, pd.DataFrame) and not df.empty:
         df.to_csv(path, index=False)
 
-
 # ----------------------------
-# Main CLI
+# CLI & main
 # ----------------------------
-
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Evaluate Poisson 1X2 forecasts from team lambdas")
-    p.add_argument(
-        "--from-team-lambdas",
-        dest="from_team_lambdas",
-        default="../data/callibrated/team_match_lambdas.parquet",
-        help="Path to parquet with per-team lambdas (default: data/team_match_lambdas.parquet)",
-    )
-    p.add_argument(
-        "--outdir",
-        default="../data/output/evaluated",
-        help="Output directory for reports (default: eval_report/)",
-    )
+    p.add_argument("--from-team-lambdas", dest="from_team_lambdas",
+                   default="../data/calibrated/team_match_lambdas.parquet",
+                   help="Path to parquet with per-team lambdas")
+    p.add_argument("--outdir", default="../data/output/evaluated", help="Output directory")
     p.add_argument("--max-goals", type=int, default=12, help="Max goals for Poisson truncation")
-    p.add_argument(
-        "--calibrate",
-        choices=["none", "multinomial"],
-        default="none",
-        help="Optional probability calibration method",
-    )
+    p.add_argument("--calibrate", choices=["none", "multinomial"], default="none",
+                   help="Optional in-script calibration (diagnostic only)")
     p.add_argument("--n-bins", type=int, default=10, help="Bins for ECE")
-
-    # JSON compactness / segment controls
-    p.add_argument(
-        "--include-segments-in-json",
-        action="store_true",
-        help="Embed by-segment tables inside summary.json (off by default)",
-    )
-    p.add_argument(
-        "--max-segments",
-        type=int,
-        default=50,
-        help="When including segments in JSON, cap to this many rows (largest n)",
-    )
-    p.add_argument("--precision", type=int, default=6, help="Rounding precision for floats in JSON")
-    p.add_argument(
-        "--skill-include-ece",
-        action="store_true",
-        help="Also compute skill for ECE (usually not meaningful)",
-    )
-
-    # Grouping
-    p.add_argument(
-        "--group-cols",
-        nargs="*",
-        default=["home_team", "away_team"],
-        help="Columns to group by for segment tables (default: home_team away_team)",
-    )
-
+    p.add_argument("--include-segments-in-json", action="store_true",
+                   help="Embed by-segment tables inside summary.json (off by default)")
+    p.add_argument("--max-segments", type=int, default=50,
+                   help="When including segments in JSON, cap to this many rows")
+    p.add_argument("--precision", type=int, default=6, help="Rounding precision in JSON")
+    p.add_argument("--skill-include-ece", action="store_true",
+                   help="Also compute skill for ECE (often not meaningful)")
+    # Optional manual overrides (auto inference used if omitted)
+    p.add_argument("--season", type=int, default=None, help="Override season (e.g., 2025)")
+    p.add_argument("--mw", type=int, default=None, help="Override matchweek (e.g., 3)")
     return p.parse_args()
-
 
 def main() -> None:
     args = parse_args()
     _ensure_dir(args.outdir)
 
+    # Build dataset
     match_df = build_from_team_lambdas(args.from_team_lambdas, max_goals=args.max_goals)
 
     # Historical subset (we evaluate only where result is known)
@@ -430,7 +422,7 @@ def main() -> None:
     if hist.empty:
         raise ValueError("No historical matches with goals found to evaluate.")
 
-    # Labels
+    # Labels & probs
     def _label(row) -> int:
         if row["home_goals"] > row["away_goals"]:
             return RESULT_MAP["H"]
@@ -441,38 +433,50 @@ def main() -> None:
     y = hist.apply(_label, axis=1).to_numpy()
     P = hist[["p_H", "p_D", "p_A"]].to_numpy(dtype=float)
 
+    # Config / evaluator
     cfg = EvalConfig(
         K=3,
         n_bins=args.n_bins,
-        group_cols=tuple(args.group_cols),
+        group_cols=("home_team", "away_team"),
         calibrate=args.calibrate,
         include_segments_in_json=args.include_segments_in_json,
         max_segments=args.max_segments,
         summary_precision=args.precision,
         include_ece_in_skill=args.skill_include_ece,
     )
-
     ev = Evaluator(y, P, cfg)
     result = ev.evaluate(groups=hist[list(cfg.group_cols)].reset_index(drop=True))
 
-    # Write JSON summary
-    _write_json(os.path.join(args.outdir, "summary.json"), result)
+    # ------- Filename stamping (AUTO unless overridden) -------
+    auto_season, auto_mw = infer_next_mw_and_season(match_df)
+    season_for_name = args.season if args.season is not None else auto_season
+    mw_for_name = args.mw if args.mw is not None else auto_mw
+    mw_for_name = min(38, max(1, int(mw_for_name)))  # clamp
 
-    # Write segment CSVs
+    suffix = f"_epl_{season_for_name}_mw{mw_for_name:02d}"
+    json_name    = f"summary{suffix}.json"
+    seg_raw_name = f"segments_raw{suffix}.csv"
+    seg_cal_name = f"segments_calibrated{suffix}.csv"
+
+    # Write outputs
+    json_path = os.path.join(args.outdir, json_name)
+    _write_json(json_path, result)
+
     seg_raw_df = ev._segment_metrics(y, ev.P_raw, hist[list(cfg.group_cols)].reset_index(drop=True))
-    _maybe_write_csv(seg_raw_df, os.path.join(args.outdir, "segments_raw.csv"))
+    _maybe_write_csv(seg_raw_df, os.path.join(args.outdir, seg_raw_name))
 
     seg_cal_df = None
     if ev.P_cal is not None:
         seg_cal_df = ev._segment_metrics(y, ev.P_cal, hist[list(cfg.group_cols)].reset_index(drop=True))
-        _maybe_write_csv(seg_cal_df, os.path.join(args.outdir, "segments_calibrated.csv"))
+        _maybe_write_csv(seg_cal_df, os.path.join(args.outdir, seg_cal_name))
 
+    cal_on = ev.P_cal is not None
     print(
-        f"Wrote {os.path.join(args.outdir, 'summary.json')}\n"
-        f"Rows evaluated: {len(y)}  |  segments_raw.csv present: {seg_raw_df is not None and not seg_raw_df.empty}\n"
-        f"Calibrated: {args.calibrate != 'none'}  |  segments_calibrated.csv present: {seg_cal_df is not None and not seg_cal_df.empty}"
+        f"Wrote {json_path}\n"
+        f"Auto-inferred: season={auto_season}, next_mw={auto_mw:02d}  |  Used: season={season_for_name}, mw={mw_for_name:02d}\n"
+        f"Rows evaluated: {len(y)}  |  segments_raw present: {seg_raw_df is not None and not seg_raw_df.empty}\n"
+        f"Calibrated (here): {cal_on}  |  segments_calibrated present: {cal_on and seg_cal_df is not None and not seg_cal_df.empty}"
     )
-
 
 if __name__ == "__main__":
     main()

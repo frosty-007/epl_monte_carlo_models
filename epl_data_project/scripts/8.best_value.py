@@ -6,9 +6,9 @@ import numpy as np
 import pandas as pd
 
 # -------- paths / settings --------
-PRICES_PARQUET = Path("../data/callibrated/market_prices.parquet")
-ODDS_PARQUET   = Path("../data/raw/odds/odds.parquet")
-LAMBDAS_PARQ   = Path("../data/callibrated/team_match_lambdas.parquet")  # for fallback λ
+PRICES_PARQUET = Path("../data/calibrated/market_prices_epl_2025_mw03.parquet")
+ODDS_PARQUET   = Path("../data/raw/odds/epl_odds_2025_MW03.parquet")
+LAMBDAS_PARQ   = Path("../data/calibrated/team_match_lambdas.parquet")  # for fallback λ
 OUT_JSON       = Path("../data/output/best_value_next_epl_mw.json")
 
 DAYS_AHEAD = 7

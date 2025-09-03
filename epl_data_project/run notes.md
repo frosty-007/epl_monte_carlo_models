@@ -28,9 +28,9 @@ How to use it
 A) One-pass “prices + odds already set”
 
 python markets_pipeline.py prices \
-  --lambdas ../data/callibrated/team_match_lambdas.parquet \
+  --lambdas ../data/calibrated/team_match_lambdas.parquet \
   --odds ../data/raw/odds.parquet \
-  --out ../data/callibrated/market_prices.parquet
+  --out ../data/calibrated/market_prices.parquet
 
 
 The output now includes fair probs/odds and your bookmaker odds, plus implied probs, edges, and Kelly — all “already set” in one file.
@@ -45,8 +45,8 @@ odds_bk_btts_yes, odds_bk_over25, odds_bk_under25
 B) Backtest without a prior prices file
 
 python markets_pipeline.py backtest \
-  --lambdas ../data/callibrated/team_match_lambdas.parquet \
-  --out ../data/callibrated/backtest_detail.parquet
+  --lambdas ../data/calibrated/team_match_lambdas.parquet \
+  --out ../data/calibrated/backtest_detail.parquet
 
 
 (If --prices is omitted, it will build fair prices internally.)
@@ -54,8 +54,8 @@ python markets_pipeline.py backtest \
 C) Simulate (per-match MC)
 
 python markets_pipeline.py simulate \
-  --prices ../data/callibrated/market_prices.parquet \
-  --out ../data/callibrated/mc_results.parquet \
+  --prices ../data/calibrated/market_prices.parquet \
+  --out ../data/calibrated/mc_results.parquet \
   -n 200000
 
 Backtest = for evaluation/tuning. It compares past probs to past results (gives you Brier/log-lik, helps pick params). Not for picking today’s bets.

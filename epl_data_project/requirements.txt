@@ -14,4 +14,5 @@ urllib3==1.26.5
 pyarrow==21.0.0
 statsmodels==0.14.3
 aiohttp==3.12.15
-underststat==0.1.2
+understat==0.1.2
+scipy>=1.11
