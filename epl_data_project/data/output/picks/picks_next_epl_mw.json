@@ -1,0 +1,17 @@
+{
+  "generated_at_utc": "2025-09-03T20:17:04.932170+00:00",
+  "window_uk": {
+    "start": "2025-09-03T00:00:00+01:00",
+    "end": "2025-09-11T00:00:00+01:00"
+  },
+  "epl_matchweek": {
+    "season": null,
+    "mw_mode": null,
+    "mw_range": null
+  },
+  "singles_count": 0,
+  "accas_count": 0,
+  "singles": [],
+  "accas": [],
+  "per_game_markets": []
+}

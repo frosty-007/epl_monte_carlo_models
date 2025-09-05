@@ -1,0 +1,421 @@
+{
+  "generated_at_utc": "2025-08-28T22:27:24.515271+00:00",
+  "window_uk": {
+    "start": "2025-08-28T00:00:00+01:00",
+    "end": "2025-09-05T00:00:00+01:00"
+  },
+  "epl_matchweek": {
+    "season": 2025,
+    "mw_mode": 4,
+    "mw_range": [
+      4,
+      4
+    ]
+  },
+  "singles_count": 10,
+  "accas_count": 5,
+  "singles": [
+    {
+      "match_id": "c68b82f9cb2f42d00f21fcb79941dbe6",
+      "home_team": "Chelsea",
+      "away_team": "Fulham",
+      "kickoff_utc": "2025-08-30T11:30:00+00:00",
+      "kickoff_uk": "2025-08-30T12:30:00+01:00",
+      "market": "1X2",
+      "selection": "Away",
+      "model_prob": 0.5766895062403021,
+      "market_imp_prob": 0.15594943088747953,
+      "edge": 0.4207400753528226,
+      "kelly": 0.49829867406258027,
+      "best_odds": 6.4,
+      "best_bookmaker": "Matchbook",
+      "score": 2.6908128399379336
+    },
+    {
+      "match_id": "9ef82f2fd00581a60f365e2b7661d820",
+      "home_team": "Tottenham Hotspur",
+      "away_team": "Bournemouth",
+      "kickoff_utc": "2025-08-30T14:00:00+00:00",
+      "kickoff_uk": "2025-08-30T15:00:00+01:00",
+      "market": "1X2",
+      "selection": "Away",
+      "model_prob": 0.47157051614118767,
+      "market_imp_prob": 0.2134242265338228,
+      "edge": 0.25814628960736485,
+      "kelly": 0.33251012565202653,
+      "best_odds": 4.8,
+      "best_bookmaker": "Matchbook",
+      "score": 1.2635384774777005
+    },
+    {
+      "match_id": "20f9ed064f5cb30e97668aead56ad1b8",
+      "home_team": "Brighton and Hove Albion",
+      "away_team": "Manchester City",
+      "kickoff_utc": "2025-08-31T13:00:00+00:00",
+      "kickoff_uk": "2025-08-31T14:00:00+01:00",
+      "market": "1X2",
+      "selection": "Home",
+      "model_prob": 0.5049549099749042,
+      "market_imp_prob": 0.22721008649758095,
+      "edge": 0.27774482347732327,
+      "kelly": 0.3593534129086996,
+      "best_odds": 4.4,
+      "best_bookmaker": "Smarkets",
+      "score": 1.221801603889579
+    },
+    {
+      "match_id": "747d1b012457b5182b41542e943113f8",
+      "home_team": "Nottingham Forest",
+      "away_team": "West Ham United",
+      "kickoff_utc": "2025-08-31T13:00:00+00:00",
+      "kickoff_uk": "2025-08-31T14:00:00+01:00",
+      "market": "1X2",
+      "selection": "Away",
+      "model_prob": 0.3664850604917382,
+      "market_imp_prob": 0.1863801568577441,
+      "edge": 0.1801049036339941,
+      "kelly": 0.22570396282323557,
+      "best_odds": 5.5,
+      "best_bookmaker": "Matchbook",
+      "score": 1.01566783270456
+    },
+    {
+      "match_id": "f46cb7d04857688a972ce1880de9dadb",
+      "home_team": "Aston Villa",
+      "away_team": "Crystal Palace",
+      "kickoff_utc": "2025-08-31T18:00:00+00:00",
+      "kickoff_uk": "2025-08-31T19:00:00+01:00",
+      "market": "1X2",
+      "selection": "Away",
+      "model_prob": 0.4287303571473455,
+      "market_imp_prob": 0.22470004397261137,
+      "edge": 0.2040303131747341,
+      "kelly": 0.2607098739553883,
+      "best_odds": 4.4,
+      "best_bookmaker": "Betfair",
+      "score": 0.8864135714483203
+    },
+    {
+      "match_id": "d0f07775865352e055d4deca55e0e56c",
+      "home_team": "Liverpool",
+      "away_team": "Arsenal",
+      "kickoff_utc": "2025-08-31T15:30:00+00:00",
+      "kickoff_uk": "2025-08-31T16:30:00+01:00",
+      "market": "1X2",
+      "selection": "Away",
+      "model_prob": 0.4525768557066204,
+      "market_imp_prob": 0.2952397931895168,
+      "edge": 0.15733706251710355,
+      "kelly": 0.21963083685837373,
+      "best_odds": 3.35,
+      "best_bookmaker": "Betfair",
+      "score": 0.5161324666171783
+    },
+    {
+      "match_id": "20f9ed064f5cb30e97668aead56ad1b8",
+      "home_team": "Brighton and Hove Albion",
+      "away_team": "Manchester City",
+      "kickoff_utc": "2025-08-31T13:00:00+00:00",
+      "kickoff_uk": "2025-08-31T14:00:00+01:00",
+      "market": "Totals 2.5",
+      "selection": "Under 2.5",
+      "model_prob": 0.5747705929491806,
+      "market_imp_prob": 0.39613526570048313,
+      "edge": 0.17863532724869752,
+      "kelly": 0.29128432158196776,
+      "best_odds": 2.5,
+      "best_bookmaker": "Matchbook",
+      "score": 0.4369264823729515
+    },
+    {
+      "match_id": "20f9ed064f5cb30e97668aead56ad1b8",
+      "home_team": "Brighton and Hove Albion",
+      "away_team": "Manchester City",
+      "kickoff_utc": "2025-08-31T13:00:00+00:00",
+      "kickoff_uk": "2025-08-31T14:00:00+01:00",
+      "market": "BTTS",
+      "selection": "No",
+      "model_prob": 0.5429822019104616,
+      "market_imp_prob": 0.39659367396593675,
+      "edge": 0.1463885279445249,
+      "kelly": 0.23418639239050332,
+      "best_odds": 2.48,
+      "best_bookmaker": "Matchbook",
+      "score": 0.3465958607379449
+    },
+    {
+      "match_id": "9ef82f2fd00581a60f365e2b7661d820",
+      "home_team": "Tottenham Hotspur",
+      "away_team": "Bournemouth",
+      "kickoff_utc": "2025-08-30T14:00:00+00:00",
+      "kickoff_uk": "2025-08-30T15:00:00+01:00",
+      "market": "Totals 2.5",
+      "selection": "Under 2.5",
+      "model_prob": 0.5452160312398229,
+      "market_imp_prob": 0.3893129770992367,
+      "edge": 0.1559030541405862,
+      "kelly": 0.22037033926826774,
+      "best_odds": 2.4,
+      "best_bookmaker": "William Hill",
+      "score": 0.30851847497557494
+    },
+    {
+      "match_id": "9ef82f2fd00581a60f365e2b7661d820",
+      "home_team": "Tottenham Hotspur",
+      "away_team": "Bournemouth",
+      "kickoff_utc": "2025-08-30T14:00:00+00:00",
+      "kickoff_uk": "2025-08-30T15:00:00+01:00",
+      "market": "BTTS",
+      "selection": "No",
+      "model_prob": 0.5073914614502719,
+      "market_imp_prob": 0.38755980861244016,
+      "edge": 0.11983165283783176,
+      "kelly": 0.19161675725172828,
+      "best_odds": 2.56,
+      "best_bookmaker": "Matchbook",
+      "score": 0.2989221413126961
+    }
+  ],
+  "accas": [
+    {
+      "legs_count": 4,
+      "acca_prob": 0.05032659732338798,
+      "acca_odds": 743.4240000000001,
+      "score": 36.41400028854239,
+      "legs": [
+        {
+          "home_team": "Brighton and Hove Albion",
+          "away_team": "Manchester City",
+          "kickoff_uk": "2025-08-31T14:00:00+01:00",
+          "market": "1X2",
+          "selection": "Home",
+          "odds": 4.4,
+          "p": 0.5049549099749042,
+          "bookmaker": "Smarkets"
+        },
+        {
+          "home_team": "Nottingham Forest",
+          "away_team": "West Ham United",
+          "kickoff_uk": "2025-08-31T14:00:00+01:00",
+          "market": "1X2",
+          "selection": "Away",
+          "odds": 5.5,
+          "p": 0.3664850604917382,
+          "bookmaker": "Matchbook"
+        },
+        {
+          "home_team": "Tottenham Hotspur",
+          "away_team": "Bournemouth",
+          "kickoff_uk": "2025-08-30T15:00:00+01:00",
+          "market": "1X2",
+          "selection": "Away",
+          "odds": 4.8,
+          "p": 0.47157051614118767,
+          "bookmaker": "Matchbook"
+        },
+        {
+          "home_team": "Chelsea",
+          "away_team": "Fulham",
+          "kickoff_uk": "2025-08-30T12:30:00+01:00",
+          "market": "1X2",
+          "selection": "Away",
+          "odds": 6.4,
+          "p": 0.5766895062403021,
+          "bookmaker": "Matchbook"
+        }
+      ]
+    },
+    {
+      "legs_count": 4,
+      "acca_prob": 0.058874269023452254,
+      "acca_odds": 594.7392000000001,
+      "score": 34.014835659592784,
+      "legs": [
+        {
+          "home_team": "Brighton and Hove Albion",
+          "away_team": "Manchester City",
+          "kickoff_uk": "2025-08-31T14:00:00+01:00",
+          "market": "1X2",
+          "selection": "Home",
+          "odds": 4.4,
+          "p": 0.5049549099749042,
+          "bookmaker": "Smarkets"
+        },
+        {
+          "home_team": "Tottenham Hotspur",
+          "away_team": "Bournemouth",
+          "kickoff_uk": "2025-08-30T15:00:00+01:00",
+          "market": "1X2",
+          "selection": "Away",
+          "odds": 4.8,
+          "p": 0.47157051614118767,
+          "bookmaker": "Matchbook"
+        },
+        {
+          "home_team": "Chelsea",
+          "away_team": "Fulham",
+          "kickoff_uk": "2025-08-30T12:30:00+01:00",
+          "market": "1X2",
+          "selection": "Away",
+          "odds": 6.4,
+          "p": 0.5766895062403021,
+          "bookmaker": "Matchbook"
+        },
+        {
+          "home_team": "Aston Villa",
+          "away_team": "Crystal Palace",
+          "kickoff_uk": "2025-08-31T19:00:00+01:00",
+          "market": "1X2",
+          "selection": "Away",
+          "odds": 4.4,
+          "p": 0.4287303571473455,
+          "bookmaker": "Betfair"
+        }
+      ]
+    },
+    {
+      "legs_count": 4,
+      "acca_prob": 0.04272963707896038,
+      "acca_odds": 743.4240000000001,
+      "score": 30.766237715789046,
+      "legs": [
+        {
+          "home_team": "Nottingham Forest",
+          "away_team": "West Ham United",
+          "kickoff_uk": "2025-08-31T14:00:00+01:00",
+          "market": "1X2",
+          "selection": "Away",
+          "odds": 5.5,
+          "p": 0.3664850604917382,
+          "bookmaker": "Matchbook"
+        },
+        {
+          "home_team": "Tottenham Hotspur",
+          "away_team": "Bournemouth",
+          "kickoff_uk": "2025-08-30T15:00:00+01:00",
+          "market": "1X2",
+          "selection": "Away",
+          "odds": 4.8,
+          "p": 0.47157051614118767,
+          "bookmaker": "Matchbook"
+        },
+        {
+          "home_team": "Chelsea",
+          "away_team": "Fulham",
+          "kickoff_uk": "2025-08-30T12:30:00+01:00",
+          "market": "1X2",
+          "selection": "Away",
+          "odds": 6.4,
+          "p": 0.5766895062403021,
+          "bookmaker": "Matchbook"
+        },
+        {
+          "home_team": "Aston Villa",
+          "away_team": "Crystal Palace",
+          "kickoff_uk": "2025-08-31T19:00:00+01:00",
+          "market": "1X2",
+          "selection": "Away",
+          "odds": 4.4,
+          "p": 0.4287303571473455,
+          "bookmaker": "Betfair"
+        }
+      ]
+    },
+    {
+      "legs_count": 4,
+      "acca_prob": 0.04575464178936662,
+      "acca_odds": 681.4720000000002,
+      "score": 30.18050724948326,
+      "legs": [
+        {
+          "home_team": "Brighton and Hove Albion",
+          "away_team": "Manchester City",
+          "kickoff_uk": "2025-08-31T14:00:00+01:00",
+          "market": "1X2",
+          "selection": "Home",
+          "odds": 4.4,
+          "p": 0.5049549099749042,
+          "bookmaker": "Smarkets"
+        },
+        {
+          "home_team": "Nottingham Forest",
+          "away_team": "West Ham United",
+          "kickoff_uk": "2025-08-31T14:00:00+01:00",
+          "market": "1X2",
+          "selection": "Away",
+          "odds": 5.5,
+          "p": 0.3664850604917382,
+          "bookmaker": "Matchbook"
+        },
+        {
+          "home_team": "Chelsea",
+          "away_team": "Fulham",
+          "kickoff_uk": "2025-08-30T12:30:00+01:00",
+          "market": "1X2",
+          "selection": "Away",
+          "odds": 6.4,
+          "p": 0.5766895062403021,
+          "bookmaker": "Matchbook"
+        },
+        {
+          "home_team": "Aston Villa",
+          "away_team": "Crystal Palace",
+          "kickoff_uk": "2025-08-31T19:00:00+01:00",
+          "market": "1X2",
+          "selection": "Away",
+          "odds": 4.4,
+          "p": 0.4287303571473455,
+          "bookmaker": "Betfair"
+        }
+      ]
+    },
+    {
+      "legs_count": 4,
+      "acca_prob": 0.0621489267378898,
+      "acca_odds": 452.81280000000004,
+      "score": 27.141829533178747,
+      "legs": [
+        {
+          "home_team": "Brighton and Hove Albion",
+          "away_team": "Manchester City",
+          "kickoff_uk": "2025-08-31T14:00:00+01:00",
+          "market": "1X2",
+          "selection": "Home",
+          "odds": 4.4,
+          "p": 0.5049549099749042,
+          "bookmaker": "Smarkets"
+        },
+        {
+          "home_team": "Tottenham Hotspur",
+          "away_team": "Bournemouth",
+          "kickoff_uk": "2025-08-30T15:00:00+01:00",
+          "market": "1X2",
+          "selection": "Away",
+          "odds": 4.8,
+          "p": 0.47157051614118767,
+          "bookmaker": "Matchbook"
+        },
+        {
+          "home_team": "Chelsea",
+          "away_team": "Fulham",
+          "kickoff_uk": "2025-08-30T12:30:00+01:00",
+          "market": "1X2",
+          "selection": "Away",
+          "odds": 6.4,
+          "p": 0.5766895062403021,
+          "bookmaker": "Matchbook"
+        },
+        {
+          "home_team": "Liverpool",
+          "away_team": "Arsenal",
+          "kickoff_uk": "2025-08-31T16:30:00+01:00",
+          "market": "1X2",
+          "selection": "Away",
+          "odds": 3.35,
+          "p": 0.4525768557066204,
+          "bookmaker": "Betfair"
+        }
+      ]
+    }
+  ]
+}
