@@ -1,53 +1,48 @@
 #!/usr/bin/env python3
 """
-fetch_epl_odds_next_matchweek.py
+6.odds_pull_next_mw.py — EPL odds for the NEXT matchweek (UK time)
 
-Fetch EPL odds (UK region) for the **NEXT** Premier League matchweek:
-- Match Result: h2h (2/3-way depending on book) + h2h_3_way
-- Totals (Over/Under)
-- BTTS (Yes/No)
-- Correct Score
-- Asian Handicap (spreads)
+Raw odds rows written to:
+  ../data/raw/odds/epl_odds_<SEASONSTART>_MWnn.parquet
 
-Matchweek detection order (no API keys):
-  1) FPL fixtures API (event == GW)
-  2) ESPN scoreboard (round/week number)
-  3) Fallback to 7-day window from now
+Always fetched in one bulk call:
+  - h2h (match winner)
+  - totals (over/under)
+  - spreads (asian handicap)
 
-Writes (non-overwriting):
-  ../data/raw/odds/epl_odds_<SEASONSTART>_MWxx.parquet
-  or (if MW can't be inferred): epl_odds_<SEASONSTART>_YYYYMMDD-YYYYMMDD.parquet
+Best-effort per-event (to avoid 422 in bulk):
+  - btts
+  - h2h_3_way
 
-Dependencies:
-  pip install requests pandas pyarrow
+CLI:
+  --out PATH_OR_DIR           default ../data/raw/odds
+  --extras LIST               comma list of extra markets to attempt per-event (default btts,h2h_3_way)
+  --fallback-days N           default 7
+  --debug
 """
+
 from __future__ import annotations
 
-import os
-import time
 import argparse
 import datetime as dt
-from typing import Dict, Iterable, List, Optional, Tuple
-
-import requests
-import pandas as pd
 from pathlib import Path
+from typing import Iterable, List, Optional, Tuple, Dict
 
-# --------- CONFIG (edit these) ---------
-API_KEY = "08062ccde5beb16ce04ae49a237472ef"   # your The Odds API key
+import pandas as pd
+import requests
+
+# ----------------- CONFIG -----------------
+API_KEY = "08062ccde5beb16ce04ae49a237472ef"  # your key
 SPORT = "soccer_epl"
-REGION = "uk"               # UK bookmakers
+REGION = "uk"
 ODDS_FORMAT = "decimal"
 DATE_FORMAT = "iso"
-DEFAULT_OUT = "../data/raw/odds"               # default to a directory
-SLEEP_BETWEEN_EVENT_CALLS = 0.25
+DEFAULT_OUT = "../data/raw/odds"
 FALLBACK_DAYS = 7
-# --------------------------------------
 
 API_HOST = "https://api.the-odds-api.com/v4"
-ESPN_SCOREBOARD = "https://site.api.espn.com/apis/site/v2/sports/soccer/eng.1/scoreboard"
 FPL_FIXTURES = "https://fantasy.premierleague.com/api/fixtures/"
-FPL_BOOTSTRAP = "https://fantasy.premierleague.com/api/bootstrap-static/"
+ESPN_SCOREBOARD = "https://site.api.espn.com/apis/site/v2/sports/soccer/eng.1/scoreboard"
 
 # ----------------- time helpers -----------------
 def iso_utc(dt_obj: dt.datetime) -> str:
@@ -63,58 +58,47 @@ def to_uk(ts):
     return t.tz_convert("Europe/London")
 
 def season_start_year_from_date(d_uk: pd.Timestamp) -> int:
-    """Premier League season starts in Aug. Aug–Dec => same year; Jan–May => previous year."""
     return int(d_uk.year if d_uk.month >= 8 else d_uk.year - 1)
 
-# ----------------- market normalization -----------------
-def _canon_market_key(mkey: str) -> str:
+# ----------------- normalization -----------------
+def canon_market_key(mkey: str) -> str:
     mk = (mkey or "").strip().lower()
-    if mk in {"h2h", "match_winner", "match_result"}: return "h2h"
+    if mk in {"h2h", "match_winner", "match result"}: return "h2h"
     if mk in {"h2h_3_way", "3_way", "1x2"}:          return "h2h_3_way"
     if mk in {"totals", "over_under", "over/under"}: return "totals"
+    if mk in {"spreads", "asian_handicap", "asian handicap", "handicap", "ah"}: return "spreads"
     if mk in {"btts", "both_teams_to_score"}:        return "btts"
-    if mk in {"correct_score", "correct score", "cs"}: return "correct_score"
-    if mk in {"spreads", "asian_handicap", "asian handicap", "asian", "asian_lines", "handicap", "ah"}:
-        return "asian_handicap"
     return mk
 
-def _norm_h2h_outcome(name: str, home_team: str, away_team: str) -> str:
+def norm_h2h_outcome(name: str, home_team: str, away_team: str) -> str:
     nm = (name or "").strip().lower()
-    if nm == "draw": return "draw"
+    if nm == "draw":
+        return "draw"
     ht = (home_team or "").strip().lower()
     at = (away_team or "").strip().lower()
     if ht and (nm == ht or ht in nm): return "home"
     if at and (nm == at or at in nm): return "away"
-    return "unknown"
+    return (name or "").strip()
 
-def _norm_btts_outcome(name: str) -> str:
-    nm = (name or "").strip().lower()
-    if nm == "yes": return "yes"
-    if nm == "no":  return "no"
-    return "unknown"
-
-def _norm_totals_outcome(name: str) -> str:
+def norm_totals_outcome(name: str) -> str:
     nm = (name or "").strip().lower()
     if nm.startswith("over"):  return "over"
     if nm.startswith("under"): return "under"
-    return "unknown"
+    return nm
 
-def _parse_cs(name: str) -> Tuple[Optional[int], Optional[int]]:
-    """Extract 'H-A' like '2-1', '1 : 1', etc."""
-    if not name: return None, None
-    s = str(name)
-    m = pd.Series([s]).str.extract(r"(\d+)\D+(\d+)", expand=True)
-    if m.isna().any(axis=None): return None, None
-    return int(m.iloc[0,0]), int(m.iloc[0,1])
+def norm_btts_outcome(name: str) -> str:
+    nm = (name or "").strip().lower()
+    if nm in {"yes", "no"}: return nm
+    return nm
 
-# ----------------- odds api -----------------
-def fetch_featured_odds(api_key: str, start_iso: str, end_iso: str) -> List[dict]:
-    """Featured markets: h2h, totals, spreads (to cover Asian Handicap)."""
+# ----------------- Odds API -----------------
+def fetch_bulk_odds(api_key: str, start_iso: str, end_iso: str, markets_csv: str) -> List[dict]:
+    """Bulk odds call for multiple guaranteed markets; API may 422 if unsupported market is present."""
     url = f"{API_HOST}/sports/{SPORT}/odds"
     params = {
         "apiKey": api_key,
         "regions": REGION,
-        "markets": "h2h,totals,spreads",
+        "markets": markets_csv,
         "oddsFormat": ODDS_FORMAT,
         "dateFormat": DATE_FORMAT,
         "commenceTimeFrom": start_iso,
@@ -127,24 +111,23 @@ def fetch_featured_odds(api_key: str, start_iso: str, end_iso: str) -> List[dict
             print(f"[quota] {k}: {r.headers[k]}")
     return r.json()
 
-def fetch_event_odds(api_key: str, event_id: str, markets: str) -> Optional[dict]:
-    """Extra markets per event: btts, h2h_3_way, correct_score (and spreads again if needed)."""
+def fetch_event_market(api_key: str, event_id: str, market: str) -> Optional[dict]:
+    """Safely fetch ONE market for ONE event; return None on 404/422."""
     url = f"{API_HOST}/sports/{SPORT}/events/{event_id}/odds"
     params = {
         "apiKey": api_key,
         "regions": REGION,
-        "markets": markets,
+        "markets": market,
         "oddsFormat": ODDS_FORMAT,
         "dateFormat": DATE_FORMAT,
     }
     r = requests.get(url, params=params, timeout=30)
-    if r.status_code == 404:
+    if r.status_code in (404, 422):
         return None
     r.raise_for_status()
     return r.json()
 
 def flatten_event(event: dict, include_keys: Optional[Iterable[str]] = None) -> List[Dict]:
-    """Flatten one event into rows (standardizing market keys)."""
     rows: List[Dict] = []
     match_id = event.get("id")
     commence_time = event.get("commence_time")
@@ -156,8 +139,8 @@ def flatten_event(event: dict, include_keys: Optional[Iterable[str]] = None) -> 
         bk_title = bk.get("title")
         bk_last = bk.get("last_update")
         for m in (bk.get("markets") or []):
-            raw_key = (m.get("key") or "").strip()
-            mkey = _canon_market_key(raw_key)
+            mkey_raw = (m.get("key") or "").strip()
+            mkey = canon_market_key(mkey_raw)
             if include_keys and mkey not in include_keys:
                 continue
             last_update = m.get("last_update") or bk_last
@@ -165,20 +148,13 @@ def flatten_event(event: dict, include_keys: Optional[Iterable[str]] = None) -> 
                 outcome_name = oc.get("name")
                 price = oc.get("price")
                 point = oc.get("point")
-                outcome = "unknown"
-                cs_h = cs_a = None
-
-                if mkey in ("h2h", "h2h_3_way"):
-                    outcome = _norm_h2h_outcome(outcome_name, home_team, away_team)
-                elif mkey == "btts":
-                    outcome = _norm_btts_outcome(outcome_name)
+                out_norm = None
+                if mkey in ("h2h", "h2h_3_way", "spreads"):
+                    out_norm = norm_h2h_outcome(outcome_name, home_team, away_team)
                 elif mkey == "totals":
-                    outcome = _norm_totals_outcome(outcome_name)
-                elif mkey == "asian_handicap":
-                    # The Odds API typically uses outcomes 'home'/'away' and 'point' is the handicap for that side
-                    outcome = _norm_h2h_outcome(outcome_name, home_team, away_team)
-                elif mkey == "correct_score":
-                    cs_h, cs_a = _parse_cs(outcome_name)
+                    out_norm = norm_totals_outcome(outcome_name)
+                elif mkey == "btts":
+                    out_norm = norm_btts_outcome(outcome_name)
 
                 rows.append({
                     "match_id": match_id,
@@ -187,28 +163,25 @@ def flatten_event(event: dict, include_keys: Optional[Iterable[str]] = None) -> 
                     "away_team": away_team,
                     "bookmaker_key": bk_key,
                     "bookmaker_title": bk_title,
-                    "market": mkey,                      # standardized key
-                    "outcome": outcome,                  # standardized outcome for that market
-                    "outcome_name": outcome_name,        # original book text (e.g., "Over 2.5", "1 - 0")
+                    "market_raw": mkey_raw,
+                    "market": mkey,
+                    "outcome": out_norm if out_norm else (outcome_name or "").strip(),
+                    "outcome_name": outcome_name,
                     "price": price,
-                    "point": point,                      # totals & asian handicap lines
-                    "cs_home": cs_h,                     # for correct_score
-                    "cs_away": cs_a,                     # for correct_score
+                    "point": point,
                     "last_update": last_update,
                     "region": REGION,
                     "odds_format": ODDS_FORMAT,
                 })
     return rows
 
-# ----------------- FPL / ESPN matchweek inference (no keys) -----------------
+# ----------------- MW inference -----------------
 def find_next_matchweek_window_via_fpl(now_uk: pd.Timestamp) -> Optional[Tuple[int, pd.Timestamp, pd.Timestamp]]:
-    """Use FPL fixtures: earliest event (GW) with kickoff_time >= now."""
     try:
         r = requests.get(FPL_FIXTURES, timeout=20)
         r.raise_for_status()
         fixtures = r.json()
-        if not isinstance(fixtures, list):
-            return None
+        if not isinstance(fixtures, list): return None
     except Exception:
         return None
 
@@ -216,14 +189,10 @@ def find_next_matchweek_window_via_fpl(now_uk: pd.Timestamp) -> Optional[Tuple[i
     for fx in fixtures:
         ev = fx.get("event")
         ko = fx.get("kickoff_time")
-        if ev is None or not ko:
-            continue
+        if ev is None or not ko: continue
         ko_uk = to_uk(pd.Timestamp(ko))
-        if ko_uk >= now_uk:
-            rows.append((int(ev), ko_uk))
-
-    if not rows:
-        return None
+        if ko_uk >= now_uk: rows.append((int(ev), ko_uk))
+    if not rows: return None
 
     df = pd.DataFrame(rows, columns=["event", "ko_uk"])
     next_ev = int(df["event"].min())
@@ -234,8 +203,7 @@ def _espn_fetch_day(date_str: str) -> Optional[dict]:
     for d in (date_str, f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:]}"):
         try:
             r = requests.get(ESPN_SCOREBOARD, params={"dates": d}, timeout=20)
-            if r.status_code == 404:
-                continue
+            if r.status_code == 404: continue
             r.raise_for_status()
             return r.json()
         except Exception:
@@ -243,28 +211,26 @@ def _espn_fetch_day(date_str: str) -> Optional[dict]:
     return None
 
 def _extract_mw_from_competition(comp: dict) -> Optional[int]:
-    for path in [("round", "number"), ("week", "number")]:
+    for path in [("round","number"), ("week","number")]:
         d = comp; ok = True
         for k in path:
-            if not isinstance(d, dict) or k not in d:
-                ok = False; break
+            if not isinstance(d, dict) or k not in d: ok=False; break
             d = d[k]
         if ok:
             try: return int(d)
             except Exception: pass
-    for path in [("round", "text"), ("round", "name"), ("week", "text")]:
+    for path in [("round","text"), ("round","name"), ("week","text")]:
         d = comp
         for k in path:
             if isinstance(d, dict) and k in d: d = d[k]
-            else: d = None; break
+            else: d=None; break
         if isinstance(d, str):
             m = pd.Series([d]).str.extract(r"(\d+)").iloc[0,0]
             if pd.notna(m): return int(m)
     return None
 
 def find_next_matchweek_window_via_espn(now_uk: pd.Timestamp, horizon_days: int = 14) -> Optional[Tuple[int, pd.Timestamp, pd.Timestamp]]:
-    dmin = now_uk.normalize()
-    dmax = dmin + pd.Timedelta(days=horizon_days)
+    dmin = now_uk.normalize(); dmax = dmin + pd.Timedelta(days=horizon_days)
     mw_to_times: Dict[int, List[pd.Timestamp]] = {}
     for day in pd.date_range(dmin.date(), dmax.date(), freq="D"):
         ds = day.strftime("%Y%m%d")
@@ -282,155 +248,136 @@ def find_next_matchweek_window_via_espn(now_uk: pd.Timestamp, horizon_days: int 
             mw = _extract_mw_from_competition(comp)
             if mw is None: continue
             mw_to_times.setdefault(int(mw), []).append(ev_uk)
-    if not mw_to_times:
-        return None
+    if not mw_to_times: return None
     next_mw = min(mw_to_times.keys())
     times = pd.Series(mw_to_times[next_mw])
     return next_mw, times.min(), times.max()
 
-# ----------------- output filename builder -----------------
+# ----------------- output name -----------------
 def build_output_path_with_mw(out_arg: str | Path,
                               dt_min_uk: pd.Timestamp,
                               dt_max_uk: pd.Timestamp,
                               mw_numbers: List[int],
                               prefix: str = "epl_odds") -> Path:
-    """
-    If `out_arg` is a directory, create epl_odds_<season>_<slug>.parquet under it.
-    If `out_arg` is a file, insert _<season>_<slug> before extension.
-    Slug = MWxx or MWxx-MWyy; fallback: YYYYMMDD-YYYYMMDD.
-    """
     p = Path(out_arg)
     season = season_start_year_from_date(dt_min_uk)
-    if mw_numbers:
-        slug = f"MW{mw_numbers[0]:02d}" if len(mw_numbers) == 1 else f"MW{mw_numbers[0]:02d}-MW{mw_numbers[-1]:02d}"
-    else:
-        slug = f"{dt_min_uk.strftime('%Y%m%d')}-{dt_max_uk.strftime('%Y%m%d')}"
-    name_piece = f"{prefix}_{season}_{slug}"
+    slug = f"MW{mw_numbers[0]:02d}" if mw_numbers else f"{dt_min_uk.strftime('%Y%m%d')}-{dt_max_uk.strftime('%Y%m%d')}"
     if p.suffix:
-        return p.with_name(f"{p.stem}_{name_piece}{p.suffix}")
-    else:
-        return p / f"{name_piece}.parquet"
+        return p.with_name(f"{p.stem}_{prefix}_{season}_{slug}{p.suffix}")
+    return p / f"{prefix}_{season}_{slug}.parquet"
 
-# ----------------- main collection (NEXT MW) -----------------
+# ----------------- main collection -----------------
 def collect_next_matchweek(api_key: str,
                            out_path: str | Path,
-                           sleep_between_event_calls: float = 0.25,
-                           fallback_days: int = FALLBACK_DAYS) -> Path:
-    now = utc_now()
-    now_uk = to_uk(pd.Timestamp(now))
+                           extras: List[str],
+                           fallback_days: int = FALLBACK_DAYS,
+                           debug: bool = False) -> Path:
+    now_uk = to_uk(pd.Timestamp(utc_now()))
 
-    # 1) FPL inference
+    # 1) find MW window
     fpl = find_next_matchweek_window_via_fpl(now_uk)
     if fpl:
         mw, start_uk, end_uk = fpl
         print(f"[info] Next MW via FPL: MW{mw:02d} | {start_uk} → {end_uk}")
         mw_numbers = [mw]
     else:
-        # 2) ESPN inference
         espn = find_next_matchweek_window_via_espn(now_uk)
         if espn:
             mw, start_uk, end_uk = espn
             print(f"[info] Next MW via ESPN: MW{mw:02d} | {start_uk} → {end_uk}")
             mw_numbers = [mw]
         else:
-            # 3) Fallback window (7 days)
             start_uk = now_uk.normalize()
             end_uk = start_uk + pd.Timedelta(days=fallback_days)
             print(f"[warn] Could not infer next MW; falling back to date window {start_uk} → {end_uk}")
             mw_numbers = []
 
-    # Convert to ISO UTC bounds for odds API (pad a bit)
-    start_utc = start_uk.tz_convert("UTC").to_pydatetime().replace(tzinfo=dt.timezone.utc) - dt.timedelta(hours=6)
-    end_utc = end_uk.tz_convert("UTC").to_pydatetime().replace(tzinfo=dt.timezone.utc) + dt.timedelta(hours=6)
-    start_iso = iso_utc(start_utc)
-    end_iso = iso_utc(end_utc)
+    # 2) padded UTC window
+    start_iso = iso_utc(start_uk.tz_convert("UTC").to_pydatetime() - dt.timedelta(hours=6))
+    end_iso   = iso_utc(end_uk.tz_convert("UTC").to_pydatetime() + dt.timedelta(hours=6))
 
-    print(f"[info] fetching EPL featured odds (h2h, totals, asian_handicap) for {start_iso} → {end_iso} (region={REGION})")
-    base_events = fetch_featured_odds(api_key, start_iso, end_iso)
+    # 3) base markets (guaranteed)
+    base_markets_csv = "h2h,totals,spreads"
+    print(f"[info] fetching base markets [{base_markets_csv}] for {start_iso} → {end_iso} (region={REGION})")
+    try:
+        base_events = fetch_bulk_odds(api_key, start_iso, end_iso, base_markets_csv)
+    except requests.HTTPError as e:
+        raise SystemExit(f"ERROR fetching base markets: {e}") from e
 
-    all_rows: List[Dict] = []
+    rows_all: List[Dict] = []
+    event_ids: List[str] = []
+
     for ev in base_events:
-        # base markets
-        all_rows.extend(flatten_event(ev))
+        rows_all.extend(flatten_event(ev))
+        if ev.get("id"):
+            event_ids.append(ev["id"])
 
-        # extra markets: BTTS + 3-way + Correct Score
-        ev_id = ev.get("id")
-        if ev_id:
-            try:
-                extra = fetch_event_odds(
-                    api_key,
-                    ev_id,
-                    markets="btts,h2h_3_way,correct_score"  # spreads already requested in base call
-                )
-            except requests.HTTPError as e:
-                code = getattr(e.response, "status_code", "?")
-                print(f"[warn] extra markets {ev_id} HTTP {code}: {e}")
-                extra = None
-            if extra:
-                # Only include the new markets from this per-event call
-                all_rows.extend(flatten_event(extra, include_keys={"btts","h2h_3_way","correct_score"}))
+    # 4) extras per event (avoid 422)
+    extras = [m.strip() for m in extras if m.strip()]
+    if extras and event_ids:
+        for ev_id in event_ids:
+            for mk in extras:
+                try:
+                    data = fetch_event_market(api_key, ev_id, mk)
+                except requests.HTTPError as e:
+                    print(f"[warn] {mk} for event {ev_id}: HTTP {e.response.status_code}")
+                    data = None
+                if not data:
+                    continue
+                # ---- FIXED LINE (removed stray brace) ----
+                rows_all.extend(flatten_event(data, include_keys={canon_market_key(mk)}))
 
-        time.sleep(sleep_between_event_calls)
-
-    # empty guard
+    # 5) DataFrame + guard to window
     cols = ["match_id","commence_time","home_team","away_team","bookmaker_key","bookmaker_title",
-            "market","outcome","outcome_name","price","point","cs_home","cs_away",
-            "last_update","region","odds_format"]
-    if not all_rows:
-        print("[warn] no odds rows collected.")
+            "market_raw","market","outcome","outcome_name","price","point","last_update","region","odds_format"]
+    if rows_all:
+        df = pd.DataFrame(rows_all)
+        df["commence_time"] = pd.to_datetime(df["commence_time"], utc=True, errors="coerce")
+        df["last_update"]   = pd.to_datetime(df["last_update"],   utc=True, errors="coerce")
+        mask = (df["commence_time"] >= pd.Timestamp(start_iso)) & (df["commence_time"] <= pd.Timestamp(end_iso))
+        df = df.loc[mask].reset_index(drop=True)
+    else:
         df = pd.DataFrame(columns=cols)
-        final_out = build_output_path_with_mw(out_path, start_uk, end_uk, mw_numbers)
-        Path(final_out).parent.mkdir(parents=True, exist_ok=True)
-        df.to_parquet(final_out, index=False)
-        print(f"[done] wrote empty {final_out}")
-        return final_out
 
-    # build DF + guard to window + de-dup
-    df = pd.DataFrame(all_rows)
-    df["commence_time"] = pd.to_datetime(df["commence_time"], utc=True, errors="coerce")
-    df["last_update"] = pd.to_datetime(df["last_update"], utc=True, errors="coerce")
-    mask = (df["commence_time"] >= pd.Timestamp(start_iso)) & (df["commence_time"] <= pd.Timestamp(end_iso))
-    df = df.loc[mask].reset_index(drop=True)
-
-    # normalize/clean
-    # de-duplicate identical rows (same match/book/market/outcome/point/price)
-    dedup_cols = ["match_id","bookmaker_key","bookmaker_title","market","outcome","outcome_name","point","price"]
-    df = df.drop_duplicates(subset=dedup_cols).reset_index(drop=True)
-
-    # actual UK window present in data (for file naming)
+    # 6) write parquet (MW naming)
     dt_min_uk = to_uk(df["commence_time"]).min() if not df.empty else start_uk
     dt_max_uk = to_uk(df["commence_time"]).max() if not df.empty else end_uk
-
     final_out = build_output_path_with_mw(out_path, dt_min_uk, dt_max_uk, mw_numbers)
+
     Path(final_out).parent.mkdir(parents=True, exist_ok=True)
     df.to_parquet(final_out, index=False)
+
     print(f"[done] wrote {final_out} with {len(df):,} rows across "
-          f"{df['match_id'].nunique()} matches and {df['bookmaker_key'].nunique()} UK bookmakers.")
+          f"{df['match_id'].nunique() if 'match_id' in df else 0} matches and "
+          f"{df['bookmaker_key'].nunique() if 'bookmaker_key' in df else 0} UK bookmakers.")
+    if debug and not df.empty:
+        print(df.head(10).to_string(index=False))
     return final_out
 
 # ----------------- CLI -----------------
 def parse_args():
-    ap = argparse.ArgumentParser(
-        description="Fetch EPL odds (UK) for the NEXT matchweek; filename includes Premier League Matchweek."
-    )
+    ap = argparse.ArgumentParser(description="Fetch EPL raw odds (UK) for the NEXT matchweek; extras attempted per-event.")
     ap.add_argument("--out", default=DEFAULT_OUT,
-                    help="Output path OR directory. If file, season & MW/date slug inserted before extension; "
-                         "if directory, file is created as epl_odds_<season>_<slug>.parquet.")
-    ap.add_argument("--sleep", type=float, default=SLEEP_BETWEEN_EVENT_CALLS, help="Delay between per-event calls (s)")
-    ap.add_argument("--fallback-days", type=int, default=FALLBACK_DAYS, help="Days to fetch if MW inference fails")
+                    help="Output path OR directory. If directory, creates epl_odds_<season>_MWnn.parquet in it.")
+    ap.add_argument("--extras", default="btts,h2h_3_way",
+                    help="Comma-separated extras tried per event (skipped quietly if unsupported).")
+    ap.add_argument("--fallback-days", type=int, default=FALLBACK_DAYS,
+                    help="Days to fetch if MW inference fails")
+    ap.add_argument("--debug", action="store_true")
     return ap.parse_args()
 
 # ----------------- entrypoint -----------------
 if __name__ == "__main__":
     args = parse_args()
-
     if not API_KEY or API_KEY == "PUT_YOUR_THEODDSAPI_KEY_HERE":
-        raise SystemExit("ERROR: please put your API key into API_KEY at the top of this script.")
+        raise SystemExit("ERROR: please put your The Odds API key into API_KEY at the top of this script.")
 
+    extras = [s.strip() for s in (args.extras or "").split(",") if s.strip()]
     final_path = collect_next_matchweek(
         api_key=API_KEY,
         out_path=args.out,
-        sleep_between_event_calls=args.sleep,
+        extras=extras,
         fallback_days=args.fallback_days,
+        debug=args.debug,
     )
     print(f"[info] odds saved to {final_path}")

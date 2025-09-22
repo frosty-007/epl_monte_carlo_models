@@ -1,75 +1,116 @@
 #!/usr/bin/env python3
-# 9.best_picks_next_epl_mw.py
-# Top 10 single picks + Top 5 accas for the next 7 days (UK time)
-# Now also outputs per-game market picks: 1X2, BTTS, Totals (O/U), Correct Score
-# Inputs (defaults):
-#   ../data/raw/odds/odds.parquet
-#   ../data/calibrated/market_prices.parquet       (optional λ for future fixtures)
-#   ../data/calibrated/team_match_lambdas.parquet  (fallback λ ratings from history)
-# Output:
-#   ../data/output/picks/picks_next_epl_<season>_mw<NN>.json
+"""
+8.epl_market_best_value.py
 
-import json, re, math, itertools
+Per-match BEST VALUE (highest EV) picks for all fixtures in the EPL matchweek encoded
+in a saved odds parquet: ../data/raw/odds/epl_odds_<SEASON>_MWnn.parquet
+
+Markets scored:
+- Match result (h2h / h2h_3_way): H/D/A
+- BTTS: Yes/No
+- Totals: searches all available lines; returns best Over/Under at the best line
+- Asian Handicap (spreads/asian_handicap/handicap/ah): searches all lines; best Home/Away; handles .0/.25/.5/.75
+- Match score (Correct Score): best EV scoreline in a small grid
+
+Output (no singles/accas):
+  ../data/output/picks/all_market_picks_next_epl_<SEASON>_mwNN.json
+"""
+
+from __future__ import annotations
+import argparse, re, json, math
 from pathlib import Path
-from datetime import date, timedelta
+from typing import List, Dict
+
 import numpy as np
 import pandas as pd
 
-# -------- paths / settings --------
-PRICES_PARQUET = Path("../data/calibrated/market_prices_epl_2025_mw03.parquet")
-ODDS_PARQUET   = Path("../data/raw/odds/epl_odds_2025_MW03.parquet")
-LAMBDAS_PARQ   = Path("../data/calibrated/team_match_lambdas.parquet")
-OUT_DIR        = Path("../data/output/picks")  # dynamic filename written here
+# ---------------- CLI ----------------
+def parse_args():
+    ap = argparse.ArgumentParser(description="Per-match best value picks (best EV) with best bookmaker prices.")
+    ap.add_argument("--odds-file", default="", help="Exact odds parquet (e.g. ../data/raw/odds/epl_odds_2025_MW04.parquet)")
+    ap.add_argument("--odds-dir", default="../data/raw/odds", help="Dir to auto-pick latest epl_odds_YYYY_MWnn.parquet")
+    ap.add_argument("--outdir", default="../data/output/picks", help="Output directory")
+    ap.add_argument("--team-lambdas", default="../data/calibrated/team_match_lambdas.parquet",
+                    help="Fallback historical team λ parquet")
+    ap.add_argument("--prices-dir", default="../data/calibrated",
+                    help="Dir possibly containing market_prices_epl_<SEASON>_mwNN.parquet")
+    ap.add_argument("--cs-k-max", type=int, default=6, help="Correct score grid 0..K")
+    ap.add_argument("--dc-rho", type=float, default=-0.05, help="Dixon–Coles tweak")
+    ap.add_argument("--grid-k", type=int, default=10, help="Grid cap for handicap EV (Skellam from 0..K grid)")
+    ap.add_argument("--debug", action="store_true")
+    return ap.parse_args()
 
-DAYS_LOOKAHEAD = 7
-CS_K_MAX       = 6         # correct-score grid (0..K)
-DC_RHO         = -0.05     # Dixon–Coles tweak on CS grid
-MIN_ACC_LEGS   = 2         # if few fixtures, allow doubles
-PREF_ACC_LEGS  = 3         # prefer trebles; consider 4-folds if enough matches
-
-# Canonical EPL teams (lowercase, canonicalized)
+# --------------- regex / canon ---------------
+FILENAME_RX = re.compile(r"epl_odds_(\d{4})_MW(\d{2})(?:-MW(\d{2}))?\.parquet$", re.IGNORECASE)
 EPL_CANON = {
     "arsenal","astonvilla","bournemouth","brentford","brighton","chelsea","crystalpalace",
     "everton","fulham","ipswich","leicester","liverpool","manutd","mancity","newcastle",
     "southampton","tottenham","westham","wolves","forest","luton","sheffieldutd","westbrom"
 }
-
-# -------- helpers --------
 def canon(s: str) -> str:
+    import re as _re
     s0 = (s or "").lower()
-    s1 = re.sub(r'[^a-z0-9]+', '', s0)
-    s1 = re.sub(r'fc$', '', s1)
+    s1 = _re.sub(r"[^a-z0-9]+","", s0)
+    s1 = _re.sub(r"fc$","", s1)
     syn = {
         "manchesterunited":"manutd","manutd":"manutd","manchesterutd":"manutd",
         "manchestercity":"mancity","mancity":"mancity",
-        "tottenhamhotspur":"tottenham","tottenham":"tottenham","spurs":"tottenham",
+        "tottenhamhotspur":"tottenham","spurs":"tottenham",
         "westhamunited":"westham","westham":"westham",
-        "newcastleunited":"newcastle","newcastle":"newcastle",
-        "brightonandhovealbion":"brighton","brightonhovealbion":"brighton","brighton":"brighton",
+        "newcastleunited":"newcastle",
+        "brightonandhovealbion":"brighton","brightonhovealbion":"brighton",
         "wolverhamptonwanderers":"wolves","wolverhampton":"wolves","wolves":"wolves",
         "nottinghamforest":"forest","nottmforest":"forest","forest":"forest",
         "sheffieldunited":"sheffieldutd","sheffieldutd":"sheffieldutd",
         "westbromwichalbion":"westbrom","westbrom":"westbrom",
-        "lutontown":"luton","luton":"luton",
-        "ipswichtown":"ipswich","ipswich":"ipswich",
-        "leicestercity":"leicester","leicester":"leicester",
-        "astonvillaa":"astonvilla","astonvilla":"astonvilla",
+        "lutontown":"luton","ipswichtown":"ipswich","leicestercity":"leicester",
+        "astonvillaa":"astonvilla",
     }
     return syn.get(s1, s1)
 
 def as_utc(ts):
     return pd.to_datetime(ts, utc=True, errors="coerce")
 
+def to_uk(ts):
+    t = pd.to_datetime(ts, utc=True, errors="coerce")
+    if isinstance(t, pd.Series): return t.dt.tz_convert("Europe/London")
+    return t.tz_convert("Europe/London")
+
 def iso_or_none(ts):
     if ts is None or pd.isna(ts): return None
     try: return pd.Timestamp(ts).isoformat()
     except Exception: return None
 
-def pois_pmf_vec(k_max: int, lam: float) -> np.ndarray:
-    out = np.zeros(k_max+1, dtype=float)
+def first_non_null(s: pd.Series):
+    s2 = s.dropna()
+    return s2.iloc[0] if not s2.empty else None
+
+def pick_latest_odds_file(odds_dir: Path) -> Path:
+    cand = []
+    for p in odds_dir.glob("epl_odds_*_MW*.parquet"):
+        m = FILENAME_RX.search(p.name)
+        if not m: continue
+        season = int(m.group(1)); mw1 = int(m.group(2))
+        mw2 = int(m.group(3)) if m.group(3) else mw1
+        cand.append((season, mw2, p.stat().st_mtime, p))
+    if not cand:
+        raise FileNotFoundError(f"No epl_odds_YYYY_MWnn.parquet files in {odds_dir}")
+    cand.sort(key=lambda x: (x[0], x[1], x[2]), reverse=True)
+    return cand[0][3]
+
+def parse_season_mw_from_filename(path: Path) -> tuple[int, List[int]]:
+    m = FILENAME_RX.search(path.name)
+    if not m: raise ValueError(f"Bad odds filename: {path.name}")
+    season = int(m.group(1)); mw1 = int(m.group(2))
+    mw2 = int(m.group(3)) if m.group(3) else mw1
+    return season, list(range(mw1, mw2+1))
+
+# --------------- math / model ---------------
+def pois_pmf_vec(k: int, lam: float) -> np.ndarray:
+    out = np.zeros(k+1)
     out[0] = math.exp(-lam)
-    for k in range(1, k_max+1):
-        out[k] = out[k-1] * lam / k
+    for i in range(1, k+1):
+        out[i] = out[i-1] * lam / i
     return out
 
 def dc_tau(lh, la, rho, x, y):
@@ -80,45 +121,15 @@ def dc_tau(lh, la, rho, x, y):
     return 1.0
 
 def cs_grid(lh: float, la: float, kmax: int, rho: float|None=None) -> np.ndarray:
-    ph = pois_pmf_vec(kmax, lh)
-    pa = pois_pmf_vec(kmax, la)
+    ph = pois_pmf_vec(kmax, lh); pa = pois_pmf_vec(kmax, la)
     cs = np.outer(ph, pa)
-    if rho is not None and abs(rho) > 0:
+    if rho and abs(rho) > 0:
         for (x,y) in [(0,0),(1,0),(0,1),(1,1)]:
             cs[x,y] *= dc_tau(lh, la, rho, x, y)
         s = cs.sum()
         if s > 0: cs = cs / s
     return cs
 
-def totals_over(mu: float, line: float) -> float:
-    k = int(math.floor(line))
-    p0 = math.exp(-mu); cdf = p0; pk = p0
-    for i in range(1, k+1):
-        pk = pk * mu / i
-        cdf += pk
-    return max(0.0, min(1.0, 1 - cdf))
-
-def prob_btts_yes(lh, la):
-    return 1 - math.exp(-lh) - math.exp(-la) + math.exp(-(lh+la))
-
-def norm_1x2(oH, oD, oA):
-    raw = np.vstack([1/np.asarray(oH,float), 1/np.asarray(oD,float), 1/np.asarray(oA,float)]).T
-    s = raw.sum(axis=1, keepdims=True)
-    with np.errstate(invalid="ignore", divide="ignore"):
-        return raw/s
-
-def two_way_dejuice(o1, o2):
-    a = 1/np.asarray(o1, float); b = 1/np.asarray(o2, float)
-    s = a+b
-    with np.errstate(invalid="ignore", divide="ignore"):
-        return a/s, b/s
-
-def kelly(odds, p):
-    b = odds - 1.0; q = 1.0 - p
-    f = (b*p - q) / b
-    return float(f) if np.isfinite(f) and f > 0 else 0.0
-
-# ---- ratings fallback for λ (from team_match_lambdas) ----
 def build_team_ratings(lam_df: pd.DataFrame):
     home = lam_df[lam_df["home"]==1][["match_id","team","opp","lambda_glm"]].rename(
         columns={"team":"home_team","opp":"away_team","lambda_glm":"lambda_home"})
@@ -152,503 +163,334 @@ def build_team_ratings(lam_df: pd.DataFrame):
     c = float(num / max(den, 1e-9))
     return team_att, team_def, hfa, c
 
-def predict_lambdas(fixtures: pd.DataFrame, team_att, team_def, hfa, c):
+def predict_lambdas(fixtures_keys: pd.DataFrame, team_att, team_def, hfa, c):
     default_att = float(team_att.mean()); default_def = float(team_def.mean())
     def pred_pair(hk, ak):
         ah = team_att.get(hk, default_att); da = team_def.get(ak, default_def)
         aa = team_att.get(ak, default_att); dh = team_def.get(hk, default_def)
         lh = c * ah * da * hfa; la = c * aa * dh
         return max(lh, 1e-6), max(la, 1e-6)
-    lams = fixtures.copy()
-    lams[["lambda_home","lambda_away"]] = lams.apply(
+    out = fixtures_keys.copy()
+    out[["lambda_home","lambda_away"]] = out.apply(
         lambda r: pd.Series(pred_pair(r["home_key"], r["away_key"])), axis=1
     )
-    return lams
+    return out
 
-def first_non_null(s: pd.Series):
-    s2 = s.dropna()
-    return s2.iloc[0] if not s2.empty else None
+# ----- Handicap EV helpers -----
+def skellam_from_grid(cs: np.ndarray) -> Dict[int, float]:
+    K = cs.shape[0]-1
+    probs = {}
+    for h in range(K+1):
+        for a in range(K+1):
+            d = h - a
+            probs[d] = probs.get(d, 0.0) + float(cs[h, a])
+    return probs
 
-# -------- matchweek inference (date-only, no APIs) --------
-def _monday_of_week(d: date) -> date:
-    return d - timedelta(days=d.weekday())  # Monday-based week
+def cdf_ge_from_skellam(sk: Dict[int,float], thr: float) -> float:
+    k = math.ceil(thr - 1e-12)
+    return sum(p for d,p in sk.items() if d >= k)
 
-def _season_year_for_date_uk(d: date) -> int:
-    # Aug..Dec -> season = year; Jan..May -> year-1; (Jun/Jul assumed previous season)
-    return d.year if d.month >= 8 else d.year - 1
+def p_eq_from_skellam(sk: Dict[int,float], val: int) -> float:
+    return sk.get(val, 0.0)
 
-def _season_start_monday(season_year: int) -> date:
-    # MW1 = Monday on/after Aug 1 in the season year
-    aug1 = date(season_year, 8, 1)
-    return aug1 + timedelta(days=(7 - aug1.weekday()) % 7)
+def ev_handicap(odds: float, sk: Dict[int,float], hcap: float, side: str) -> float:
+    if side == "away":
+        sk = { -d: p for d,p in sk.items() }
+        hcap = -hcap
+    def _ev_simple(h):
+        if abs(h - round(h)) < 1e-12:
+            p_win  = cdf_ge_from_skellam(sk, 1 - h)
+            p_push = p_eq_from_skellam(sk, int(-h))
+            p_lose = 1 - p_win - p_push
+            return p_win * (odds - 1.0) - p_lose
+        else:
+            p_win = cdf_ge_from_skellam(sk, -h + 1e-12)
+            p_lose = 1 - p_win
+            return p_win * (odds - 1.0) - p_lose
+    if abs((hcap*2) - round(hcap*2)) < 1e-12:
+        return _ev_simple(hcap)
+    lower_half = math.floor(hcap*2)/2.0
+    upper_half = lower_half + 0.5
+    return 0.5*_ev_simple(lower_half) + 0.5*_ev_simple(upper_half)
 
-def infer_matchweek_from_dates(kickoffs_uk: pd.Series):
-    """
-    Returns (season_year, mw_mode, mw_min, mw_max).
-    """
-    dt = pd.to_datetime(kickoffs_uk, errors="coerce")
-    if dt.dt.tz is None:
-        dt = dt.dt.tz_localize("Europe/London")
-    else:
-        dt = dt.dt.tz_convert("Europe/London")
-    dt = dt.dropna()
-    if dt.empty:
-        return None, None, None, None
-    dates = dt.dt.date
-    seasons = pd.Series(dates).map(_season_year_for_date_uk)
-    season_year = int(seasons.mode().iloc[0])
-    s0 = _season_start_monday(season_year)
-    week_starts = pd.Series(dates).map(_monday_of_week)
-    mw = ((week_starts - s0).map(lambda td: td.days // 7) + 1).astype(int)
-    return season_year, int(mw.mode().iloc[0]), int(mw.min()), int(mw.max())
-
+# --------------- main ---------------
 def main():
-    if not ODDS_PARQUET.exists():
-        raise FileNotFoundError(f"{ODDS_PARQUET} not found. Fetch odds first.")
+    args = parse_args()
+    odds_path = Path(args.odds_file) if args.odds_file else pick_latest_odds_file(Path(args.odds_dir))
+    season, mws = parse_season_mw_from_filename(odds_path)
+    if args.debug: print(f"[info] using {odds_path.name} (season={season} MW={mws})")
 
-    # Load odds and filter to next 7 days (UK time) & EPL teams
-    odds = pd.read_parquet(ODDS_PARQUET).copy()
-    odds["commence_time"] = as_utc(odds["commence_time"])
-    odds["home_key"] = odds["home_team"].apply(canon)
-    odds["away_key"] = odds["away_team"].apply(canon)
+    # ---- load odds ----
+    df = pd.read_parquet(odds_path).copy()
+    need = {"match_id","commence_time","home_team","away_team","market","outcome","bookmaker_title","price","point"}
+    missing = [c for c in need if c not in df.columns]
+    if missing: raise SystemExit(f"Odds parquet missing columns: {missing}")
 
-    # EPL filter: both teams recognized as EPL
-    epl_mask = odds["home_key"].isin(EPL_CANON) & odds["away_key"].isin(EPL_CANON)
-    odds = odds[epl_mask].copy()
+    df["commence_time"] = as_utc(df["commence_time"])
+    df["home_key"] = df["home_team"].apply(canon)
+    df["away_key"] = df["away_team"].apply(canon)
+    epl_mask = df["home_key"].isin(EPL_CANON) & df["away_key"].isin(EPL_CANON)
+    df = df[epl_mask].copy()
+    if df.empty: raise SystemExit("No EPL rows in odds parquet.")
 
-    uk_now = pd.Timestamp.now(tz="Europe/London")
-    start_uk = uk_now.normalize()
-    end_uk   = (uk_now + pd.Timedelta(days=DAYS_LOOKAHEAD)).normalize() + pd.Timedelta(days=1)
+    # Fixtures (use ALL fixtures in that saved MW)
+    fixtures = (df.groupby("match_id", as_index=False)
+                  .agg(home_team=("home_team", first_non_null),
+                       away_team=("away_team", first_non_null),
+                       kickoff_utc=("commence_time","min")))
+    fixtures["kickoff_uk"] = to_uk(fixtures["kickoff_utc"])
+    dt_min_uk = fixtures["kickoff_uk"].min(); dt_max_uk = fixtures["kickoff_uk"].max()
 
-    odds["kickoff_uk"] = odds["commence_time"].dt.tz_convert("Europe/London")
-    in_window = (odds["kickoff_uk"] >= start_uk) & (odds["kickoff_uk"] < end_uk)
-    nxt = odds[in_window].copy()
-
-    # Robust names/KO per match_id from all rows in window
-    names_by_match = (
-        nxt.groupby("match_id", as_index=False)
-           .agg(
-               home_team=("home_team", first_non_null),
-               away_team=("away_team", first_non_null),
-               kickoff_utc=("commence_time", "min"),
-               kickoff_uk=("kickoff_uk", "min"),
-           )
-    )
-    keys_by_match = (
-        nxt.groupby("match_id", as_index=False)
-           .agg(
-               home_key=("home_key", first_non_null),
-               away_key=("away_key", first_non_null),
-           )
-    )
-    fixtures = names_by_match.merge(keys_by_match, on="match_id", how="left")
-
-    # ---------- infer EPL matchweek (for output naming) ----------
-    season_year = mw_mode = mw_min = mw_max = None
-    if not fixtures.empty and "kickoff_uk" in fixtures:
-        season_year, mw_mode, mw_min, mw_max = infer_matchweek_from_dates(fixtures["kickoff_uk"])
-    # dynamic output filename
-    OUT_DIR.mkdir(parents=True, exist_ok=True)
-    if season_year is not None and mw_mode is not None:
-        out_json = OUT_DIR / f"picks_next_epl_{season_year}_mw{mw_mode:02d}.json"
-    else:
-        out_json = OUT_DIR / "picks_next_epl_mw.json"  # fallback
-
-    if fixtures.empty:
-        with open(out_json, "w") as f:
-            json.dump({
-                "generated_at_utc": pd.Timestamp.now(tz="UTC").isoformat(),
-                "window_uk": {"start": iso_or_none(start_uk), "end": iso_or_none(end_uk)},
-                "epl_matchweek": {
-                    "season": season_year, "mw_mode": mw_mode, "mw_range": [mw_min, mw_max] if mw_min is not None else None
-                },
-                "singles_count": 0, "accas_count": 0, "singles": [], "accas": [],
-                "per_game_markets": []
-            }, f, indent=2)
-        print(f"[warn] No EPL fixtures in next {DAYS_LOOKAHEAD} days. Wrote empty {out_json}")
-        return
-
-    # λ: try market_prices (already contains future match_id rows) else fallback ratings from historical lambdas
-    if PRICES_PARQUET.exists():
-        prices = pd.read_parquet(PRICES_PARQUET).copy()
+    # ---- λ: prices parquet if present, else historical fallback ----
+    prices_path = Path(args.prices_dir) / f"market_prices_epl_{season}_mw{mws[0]:02d}.parquet"
+    model = pd.DataFrame()
+    if prices_path.exists():
+        prices = pd.read_parquet(prices_path)
         have = {"match_id","lambda_home","lambda_away"}
-        model = fixtures.merge(prices[list(have)], on="match_id", how="left")
-        model = model.dropna(subset=["lambda_home","lambda_away"])
-    else:
-        model = pd.DataFrame()
-
+        model = fixtures.merge(prices[list(have)], on="match_id", how="left").dropna(subset=["lambda_home","lambda_away"])
+        if args.debug: print(f"[info] λ from {prices_path.name}: {len(model)}/{len(fixtures)}")
     if model.empty:
-        if not LAMBDAS_PARQ.exists():
-            raise RuntimeError("No λ for upcoming fixtures (market_prices absent/empty; no team_match_lambdas fallback).")
-        lam_hist = pd.read_parquet(LAMBDAS_PARQ).copy()
+        lam_parq = Path(args.team_lambdas)
+        if not lam_parq.exists():
+            raise SystemExit("No λ available and team_match_lambdas.parquet not found.")
+        lam_hist = pd.read_parquet(lam_parq).copy()
         team_att, team_def, hfa, c = build_team_ratings(lam_hist)
-        # FIX: use list, not set, for column selection
-        model = predict_lambdas(fixtures[["match_id","home_key","away_key"]], team_att, team_def, hfa, c) \
-                  .merge(fixtures.drop(columns=["home_key","away_key"]), on="match_id", how="left")
+        keys = fixtures.assign(home_key=fixtures["home_team"].apply(canon),
+                               away_key=fixtures["away_team"].apply(canon))[["match_id","home_key","away_key"]]
+        model = predict_lambdas(keys, team_att, team_def, hfa, c).merge(
+            fixtures, on="match_id", how="left"
+        )
+        if args.debug: print(f"[info] λ predicted for {len(model)} matches")
 
-    # DIAG & ensure names/KO
-    n_total = len(model)
-    n_named = model["home_team"].notna().sum()
-    print(f"[diag] upcoming matches with λ: {n_total} | with names: {n_named}")
+    # ---------- helpers ----------
+    def best_by_group(frame, keys):
+        idx = frame.groupby(keys)["price"].idxmax()
+        return frame.loc[idx].copy()
 
-    # ---------- top-of-market odds (in window only) ----------
-    o = nxt  # shorthand
+    mkt_lower = df["market"].astype(str).str.lower()
 
-    # 1X2
-    h2h = o[o["market"].isin(["h2h","h2h_3_way"]) & o["outcome"].isin(["home","draw","away"])].copy()
-    if not h2h.empty:
-        idx = h2h.groupby(["match_id","outcome"])["price"].idxmax()
-        h2h_best = h2h.loc[idx, ["match_id","outcome","bookmaker_title","price"]]
-        h2h_p = h2h_best.pivot(index="match_id", columns="outcome", values="price").rename(
-            columns={"home":"bk_home","draw":"bk_draw","away":"bk_away"}).reset_index()
-        h2h_b = h2h_best.pivot(index="match_id", columns="outcome", values="bookmaker_title").rename(
-            columns={"home":"bk_home_book","draw":"bk_draw_book","away":"bk_away_book"}).reset_index()
-        h2h_top = h2h_p.merge(h2h_b, on="match_id", how="inner")
-    else:
-        h2h_top = pd.DataFrame(columns=["match_id","bk_home","bk_draw","bk_away","bk_home_book","bk_draw_book","bk_away_book"])
+    # H2H
+    h2h = df[df["market"].isin(["h2h","h2h_3_way"]) & df["outcome"].isin(["home","draw","away"])].copy()
+    h2h_best = best_by_group(h2h, ["match_id","outcome"]) if not h2h.empty else h2h
 
     # BTTS
-    btts_odds = o[o["market"].astype(str).str.lower().eq("btts") & o["outcome"].str.lower().isin(["yes","no"])].copy()
-    btts_odds["outcome"] = btts_odds["outcome"].str.lower()
-    if not btts_odds.empty:
-        idx = btts_odds.groupby(["match_id","outcome"])["price"].idxmax()
-        btts_best = btts_odds.loc[idx, ["match_id","outcome","bookmaker_title","price"]]
-        btts_yes_df = btts_best[btts_best["outcome"]=="yes"].rename(
-            columns={"price":"bk_btts_yes","bookmaker_title":"bk_btts_yes_book"})
-        btts_no_df  = btts_best[btts_best["outcome"]=="no" ].rename(
-            columns={"price":"bk_btts_no","bookmaker_title":"bk_btts_no_book"})
-        btts_top = btts_yes_df.merge(btts_no_df, on="match_id", how="outer")[["match_id","bk_btts_yes","bk_btts_yes_book","bk_btts_no","bk_btts_no_book"]]
-    else:
-        btts_top = pd.DataFrame(columns=["match_id","bk_btts_yes","bk_btts_yes_book","bk_btts_no","bk_btts_no_book"])
+    btts = df[mkt_lower.eq("btts") & df["outcome"].str.lower().isin(["yes","no"])].copy()
+    if not btts.empty: btts["outcome"] = btts["outcome"].str.lower()
+    btts_best = best_by_group(btts, ["match_id","outcome"]) if not btts.empty else btts
 
-    # Totals (all lines)
-    tot = o[o["market"].astype(str).str.lower().eq("totals") & o["outcome"].isin(["over","under"])].copy()
+    # Totals
+    tot = df[mkt_lower.eq("totals") & df["outcome"].isin(["over","under"])].copy()
     if not tot.empty:
         tot["point_f"] = pd.to_numeric(tot["point"], errors="coerce")
         tot = tot.dropna(subset=["point_f"])
-        idx = tot.groupby(["match_id","point_f","outcome"])["price"].idxmax()
-        tot_best = tot.loc[idx, ["match_id","point_f","outcome","bookmaker_title","price"]]
-        tot_over = tot_best[tot_best["outcome"]=="over"].rename(columns={"price":"bk_over","bookmaker_title":"bk_over_book"})
-        tot_under= tot_best[tot_best["outcome"]=="under"].rename(columns={"price":"bk_under","bookmaker_title":"bk_under_book"})
-        tot_top  = tot_over.merge(tot_under, on=["match_id","point_f"], how="outer")
+        tot_best = best_by_group(tot, ["match_id","point_f","outcome"])
     else:
-        tot_top = pd.DataFrame(columns=["match_id","point_f","bk_over","bk_over_book","bk_under","bk_under_book"])
-
-    # Correct Score (market names vary; catch "correct score" / "correct_score" / "cs")
-    mkt = o["market"].astype(str).str.lower()
-    cs = o[mkt.str.contains(r"\b(?:correct[\s_]?score|cs)\b", regex=True, na=False)].copy()
-    if not cs.empty:
-        sc = cs["outcome"].astype(str).str.extract(r"(\d+)\D+(\d+)")
-        sc.columns = ["sc_h", "sc_a"]
-        cs = pd.concat([cs, sc], axis=1).dropna(subset=["sc_h","sc_a"]).copy()
-        cs["sc_h"] = cs["sc_h"].astype(int); cs["sc_a"] = cs["sc_a"].astype(int)
-        cs = cs[(cs["sc_h"] <= CS_K_MAX) & (cs["sc_a"] <= CS_K_MAX)]
-        if cs.empty:
-            cs_top = pd.DataFrame(columns=["match_id","sc_h","sc_a","bk_cs_book","bk_cs"])
-        else:
-            idx = cs.groupby(["match_id","sc_h","sc_a"])["price"].idxmax()
-            cs_top = cs.loc[idx, ["match_id","sc_h","sc_a","bookmaker_title","price"]].rename(
-                columns={"price":"bk_cs","bookmaker_title":"bk_cs_book"})
-    else:
-        cs_top = pd.DataFrame(columns=["match_id","sc_h","sc_a","bk_cs_book","bk_cs"])
-
-    # ---------- assemble model + odds (names first), drop nameless ----------
-    base = (model
-            .merge(h2h_top, on="match_id", how="left")
-            .merge(btts_top, on="match_id", how="left"))
-    base = base.dropna(subset=["home_team","away_team","kickoff_utc","kickoff_uk"])
-
-    # ---------- build candidates ----------
-    candidates = []
-
-    # 1X2 de-juice (if any)
-    if not base.empty and {"bk_home","bk_draw","bk_away"}.issubset(base.columns):
-        imp = norm_1x2(base["bk_home"], base["bk_draw"], base["bk_away"])
-        base["impH_mkt"], base["impD_mkt"], base["impA_mkt"] = imp[:,0], imp[:,1], imp[:,2]
-
-    for _, r in base.iterrows():
-        lh, la = float(r["lambda_home"]), float(r["lambda_away"])
-        grid = cs_grid(lh, la, CS_K_MAX, rho=DC_RHO)
-        pD = float(np.trace(grid)); pH = float(np.triu(grid, 1).sum()); pA = float(np.tril(grid, -1).sum())
-        p_btts = prob_btts_yes(lh, la)
-
-        # 1X2
-        for sel, p, o, book, imp_p in [
-            ("Home", pH, r.get("bk_home"), r.get("bk_home_book"), r.get("impH_mkt")),
-            ("Draw", pD, r.get("bk_draw"), r.get("bk_draw_book"), r.get("impD_mkt")),
-            ("Away", pA, r.get("bk_away"), r.get("bk_away_book"), r.get("impA_mkt")),
-        ]:
-            if pd.notna(o) and float(o) > 1.0 and p is not None:
-                o = float(o)
-                candidates.append({
-                    "match_id": r["match_id"],
-                    "home_team": r["home_team"], "away_team": r["away_team"],
-                    "kickoff_utc": iso_or_none(r.get("kickoff_utc")), "kickoff_uk": iso_or_none(r.get("kickoff_uk")),
-                    "market": "1X2", "selection": sel,
-                    "model_prob": float(p),
-                    "market_imp_prob": float(imp_p) if imp_p is not None and not pd.isna(imp_p) else None,
-                    "edge": float(p - imp_p) if imp_p is not None and not pd.isna(imp_p) else None,
-                    "kelly": kelly(o, float(p)),
-                    "best_odds": o, "best_bookmaker": book,
-                    "score": float(p*o - 1.0),
-                })
-
-        # BTTS
-        y_odds, n_odds = r.get("bk_btts_yes"), r.get("bk_btts_no")
-        y_book, n_book = r.get("bk_btts_yes_book"), r.get("bk_btts_no_book")
-        imp_y = imp_n = None
-        if pd.notna(y_odds) and pd.notna(n_odds):
-            imp_y, imp_n = two_way_dejuice(y_odds, n_odds)
-        if pd.notna(y_odds) and float(y_odds) > 1.0:
-            o = float(y_odds)
-            candidates.append({
-                "match_id": r["match_id"],
-                "home_team": r["home_team"], "away_team": r["away_team"],
-                "kickoff_utc": iso_or_none(r.get("kickoff_utc")), "kickoff_uk": iso_or_none(r.get("kickoff_uk")),
-                "market": "BTTS", "selection": "Yes",
-                "model_prob": float(p_btts),
-                "market_imp_prob": float(imp_y) if imp_y is not None else None,
-                "edge": float(p_btts - imp_y) if imp_y is not None else None,
-                "kelly": kelly(o, float(p_btts)),
-                "best_odds": o, "best_bookmaker": y_book,
-                "score": float(p_btts*o - 1.0),
-            })
-        if pd.notna(n_odds) and float(n_odds) > 1.0:
-            o = float(n_odds)
-            p_no = 1 - p_btts
-            candidates.append({
-                "match_id": r["match_id"],
-                "home_team": r["home_team"], "away_team": r["away_team"],
-                "kickoff_utc": iso_or_none(r.get("kickoff_utc")), "kickoff_uk": iso_or_none(r.get("kickoff_uk")),
-                "market": "BTTS", "selection": "No",
-                "model_prob": float(p_no),
-                "market_imp_prob": float(imp_n) if imp_n is not None else None,
-                "edge": float(p_no - imp_n) if imp_n is not None else None,
-                "kelly": kelly(o, float(p_no)),
-                "best_odds": o, "best_bookmaker": n_book,
-                "score": float(p_no*o - 1.0),
-            })
-
-    # Totals (by line)
-    if not tot_top.empty:
-        tot_join = tot_top.merge(model[["match_id","home_team","away_team","kickoff_utc","kickoff_uk","lambda_home","lambda_away"]],
-                                 on="match_id", how="inner")
-        for _, r in tot_join.iterrows():
-            lh, la = float(r["lambda_home"]), float(r["lambda_away"])
-            mu = lh + la
-            line = float(r["point_f"])
-            p_over = totals_over(mu, line); p_under = 1 - p_over
-            o_over, o_under = r.get("bk_over"), r.get("bk_under")
-            b_over, b_under = r.get("bk_over_book"), r.get("bk_under_book")
-            imp_over = imp_under = None
-            if pd.notna(o_over) and pd.notna(o_under):
-                imp_over, imp_under = two_way_dejuice(o_over, o_under)
-            if pd.notna(o_over) and float(o_over) > 1.0:
-                o = float(o_over)
-                candidates.append({
-                    "match_id": r["match_id"],
-                    "home_team": r["home_team"], "away_team": r["away_team"],
-                    "kickoff_utc": iso_or_none(r.get("kickoff_utc")), "kickoff_uk": iso_or_none(r.get("kickoff_uk")),
-                    "market": f"Totals {line}", "selection": f"Over {line}",
-                    "model_prob": float(p_over),
-                    "market_imp_prob": float(imp_over) if imp_over is not None else None,
-                    "edge": float(p_over - imp_over) if imp_over is not None else None,
-                    "kelly": kelly(o, float(p_over)),
-                    "best_odds": o, "best_bookmaker": b_over,
-                    "score": float(p_over*o - 1.0),
-                })
-            if pd.notna(o_under) and float(o_under) > 1.0:
-                o = float(o_under)
-                candidates.append({
-                    "match_id": r["match_id"],
-                    "home_team": r["home_team"], "away_team": r["away_team"],
-                    "kickoff_utc": iso_or_none(r.get("kickoff_utc")), "kickoff_uk": iso_or_none(r.get("kickoff_uk")),
-                    "market": f"Totals {line}", "selection": f"Under {line}",
-                    "model_prob": float(p_under),
-                    "market_imp_prob": float(imp_under) if imp_under is not None else None,
-                    "edge": float(p_under - imp_under) if imp_under is not None else None,
-                    "kelly": kelly(o, float(p_under)),
-                    "best_odds": o, "best_bookmaker": b_under,
-                    "score": float(p_under*o - 1.0),
-                })
+        tot_best = tot
 
     # Correct Score
-    if not cs_top.empty:
-        cs_join = cs_top.merge(model[["match_id","home_team","away_team","kickoff_utc","kickoff_uk","lambda_home","lambda_away"]],
-                               on="match_id", how="inner")
-        for _, r in cs_join.iterrows():
-            lh, la = float(r["lambda_home"]), float(r["lambda_away"])
-            grid = cs_grid(lh, la, CS_K_MAX, rho=DC_RHO)
-            h, a = int(r["sc_h"]), int(r["sc_a"])
-            if h <= CS_K_MAX and a <= CS_K_MAX:
-                p = float(grid[h, a]); o = float(r["bk_cs"])
-                if o > 1.0 and p > 0:
-                    candidates.append({
-                        "match_id": r["match_id"],
-                        "home_team": r["home_team"], "away_team": r["away_team"],
-                        "kickoff_utc": iso_or_none(r.get("kickoff_utc")), "kickoff_uk": iso_or_none(r.get("kickoff_uk")),
-                        "market": "Correct Score", "selection": f"{h}-{a}",
-                        "model_prob": p,
-                        "market_imp_prob": None, "edge": None,
-                        "kelly": kelly(o, p),
-                        "best_odds": o, "best_bookmaker": r.get("bk_cs_book"),
-                        "score": p*o - 1.0,
-                    })
+    cs_mask = mkt_lower.str.contains(r"\b(?:correct[\s_]?score|cs)\b", regex=True, na=False)
+    cs = df[cs_mask].copy()
+    if not cs.empty:
+        sc = cs["outcome"].astype(str).str.extract(r"(\d+)\D+(\d+)")
+        sc.columns = ["sc_h","sc_a"]
+        cs = pd.concat([cs, sc], axis=1).dropna(subset=["sc_h","sc_a"]).copy()
+        cs["sc_h"] = cs["sc_h"].astype(int); cs["sc_a"] = cs["sc_a"].astype(int)
+        cs_best = best_by_group(cs, ["match_id","sc_h","sc_a"])
+    else:
+        cs_best = cs
 
-    cand_df = pd.DataFrame(candidates)
-    if not cand_df.empty:
-        cand_df = cand_df.dropna(subset=["home_team","away_team","best_odds","model_prob"])
-    cand_df = cand_df.sort_values(["score","kelly"], ascending=[False, False]).reset_index(drop=True)
+    # Asian Handicap
+    ah_mask = mkt_lower.str.contains(r"\b(spreads?|asian[_\s]?handicap|handicap|^ah)$", regex=True, na=False)
+    ah = df[ah_mask].copy()
+    if not ah.empty:
+        ah["point_f"] = pd.to_numeric(ah["point"], errors="coerce")
+        ah = ah.dropna(subset=["point_f"])
+        def _side(row):
+            nm = (str(row.get("outcome")) if pd.notna(row.get("outcome")) else "").lower()
+            ht = (row.get("home_team") or "").lower(); at = (row.get("away_team") or "").lower()
+            if nm in ("home","away"): return nm
+            if ht and (nm==ht or ht in nm): return "home"
+            if at and (nm==at or at in nm): return "away"
+            return None
+        ah["side"] = ah.apply(_side, axis=1)
+        ah = ah.dropna(subset=["side"])
+        ah_best = best_by_group(ah, ["match_id","point_f","side"])
+    else:
+        ah_best = ah
 
-    # -------- PER-GAME MARKET PICKS (1X2, BTTS, Totals, Correct Score) --------
-    def _as_float(x):
-        try: return float(x)
-        except Exception: return None
+    # ---------- build EV & choose best pick per market ----------
+    out_rows = []
+    lams = model.set_index("match_id")[["lambda_home","lambda_away"]].to_dict(orient="index")
 
-    def _mk_sel_dict(row):
-        return {
-            "market": row.get("market"),
-            "selection": row.get("selection"),
-            "odds": _as_float(row.get("best_odds")),
-            "p": _as_float(row.get("model_prob")),
-            "edge": _as_float(row.get("edge")),
-            "kelly": _as_float(row.get("kelly")),
-            "ev": _as_float(row.get("score")),
-            "bookmaker": row.get("best_bookmaker"),
+    for _, fx in fixtures.sort_values("kickoff_uk").iterrows():
+        mid = fx["match_id"]; meta = {
+            "match_id": int(mid) if pd.notna(mid) and str(mid).isdigit() else str(mid),
+            "home_team": fx["home_team"], "away_team": fx["away_team"],
+            "kickoff_uk": iso_or_none(fx["kickoff_uk"]),
+            "kickoff_utc": iso_or_none(fx["kickoff_utc"]),
         }
+        lh = lams.get(mid, {}).get("lambda_home")
+        la = lams.get(mid, {}).get("lambda_away")
+        best = {}
 
-    def _top_by_ev(df, n):
-        if df is None or df.empty: return []
-        use = df.sort_values(["score","kelly"], ascending=[False, False]).head(n)
-        return [_mk_sel_dict(r) for _, r in use.iterrows()]
+        # --- 1X2 ---
+        sub = h2h_best[h2h_best["match_id"].eq(mid)]
+        if not sub.empty:
+            pick_res = None
+            if lh is not None:
+                grid = cs_grid(lh, la, kmax=10, rho=args.dc_rho)
+                pD = float(np.trace(grid)); pH = float(np.triu(grid, 1).sum()); pA = float(np.tril(grid, -1).sum())
+                opts = []
+                for lab, p in [("home", pH), ("draw", pD), ("away", pA)]:
+                    row = sub[sub["outcome"].eq(lab)]
+                    if row.empty: continue
+                    o = float(row["price"].iloc[0]); bk = str(row["bookmaker_title"].iloc[0])
+                    ev = p*o - 1.0
+                    opts.append(("1X2", lab.title(), o, bk, p, ev))
+                if opts: pick_res = max(opts, key=lambda x: x[5])
+            else:
+                row = sub.sort_values("price", ascending=False).head(1).iloc[0]
+                pick_res = ("1X2", str(row["outcome"]).title(), float(row["price"]), str(row["bookmaker_title"]), None, None)
+            if pick_res:
+                best["match_result"] = {
+                    "selection": pick_res[1], "price": pick_res[2], "bookmaker": pick_res[3],
+                    "model_prob": pick_res[4], "ev": pick_res[5]
+                }
 
-    def _select_totals_lines(df, center=2.5, max_lines=3):
-        if df is None or df.empty: return []
-        df = df.copy()
-        df["line"] = df["market"].astype(str).str.extract(r"Totals\s+([0-9.]+)", expand=False).astype(float)
-        df = df.dropna(subset=["line"])
-        keep_lines = (df.assign(dist=(df["line"] - center).abs())
-                        .sort_values("dist")
-                        .drop_duplicates(subset=["match_id","line"])
-                        .head(max_lines)["line"].tolist())
-        out = []
-        for ln in keep_lines:
-            side = df[df["line"] == ln]
-            over_pick  = _top_by_ev(side[side["selection"].str.startswith("Over")],  1)
-            under_pick = _top_by_ev(side[side["selection"].str.startswith("Under")], 1)
-            if over_pick:  over_pick[0]["line"] = float(ln);  out.extend(over_pick)
-            if under_pick: under_pick[0]["line"] = float(ln); out.extend(under_pick)
-        return out
+        # --- BTTS ---
+        sub = btts_best[btts_best["match_id"].eq(mid)]
+        if not sub.empty:
+            pick_btts = None
+            if lh is not None:
+                p_yes = 1 - math.exp(-lh) - math.exp(-la) + math.exp(-(lh+la))
+                p_no = 1 - p_yes
+                opts = []
+                for lab, p in [("yes", p_yes), ("no", p_no)]:
+                    row = sub[sub["outcome"].eq(lab)]
+                    if row.empty: continue
+                    o = float(row["price"].iloc[0]); bk = str(row["bookmaker_title"].iloc[0])
+                    ev = p*o - 1.0
+                    opts.append(("BTTS", lab.title(), o, bk, p, ev))
+                if opts: pick_btts = max(opts, key=lambda x: x[5])
+            else:
+                row = sub.sort_values("price", ascending=False).head(1).iloc[0]
+                pick_btts = ("BTTS", str(row["outcome"]).title(), float(row["price"]), str(row["bookmaker_title"]), None, None)
+            if pick_btts:
+                best["btts"] = {
+                    "selection": pick_btts[1], "price": pick_btts[2], "bookmaker": pick_btts[3],
+                    "model_prob": pick_btts[4], "ev": pick_btts[5]
+                }
 
-    per_game = []
-    if not cand_df.empty:
-        meta_cols = ["match_id","home_team","away_team","kickoff_uk","kickoff_utc"]
-        meta = (model[meta_cols].drop_duplicates("match_id")
-                if set(meta_cols).issubset(model.columns) else
-                cand_df[["match_id","home_team","away_team","kickoff_uk"]].drop_duplicates("match_id"))
-        c = cand_df.copy()
-        for mid, mrow in meta.set_index("match_id").iterrows():
-            sub = c[c["match_id"] == mid].copy()
-            if sub.empty: continue
-            m1x2    = sub[sub["market"].eq("1X2")]
-            mbtts   = sub[sub["market"].eq("BTTS")]
-            mtotals = sub[sub["market"].str.startswith("Totals", na=False)]
-            mcs     = sub[sub["market"].eq("Correct Score")]
+        # --- Totals (all lines) ---
+        sub = tot_best[tot_best["match_id"].eq(mid)]
+        if not sub.empty:
+            pick_totals = None
+            if lh is not None:
+                mu = lh + la
+                opts = []
+                for ln, grp in sub.groupby("point_f"):
+                    over = grp[grp["outcome"].eq("over")]
+                    under= grp[grp["outcome"].eq("under")]
+                    if not over.empty:
+                        o = float(over["price"].iloc[0]); bk = str(over["bookmaker_title"].iloc[0])
+                        k = int(math.floor(ln))
+                        pk = math.exp(-mu); cdf = pk
+                        for i in range(1, k+1):
+                            pk = pk * mu / i; cdf += pk
+                        p = max(0.0, min(1.0, 1 - cdf))
+                        ev = p*o - 1.0
+                        opts.append(("Over", ln, o, bk, p, ev))
+                    if not under.empty:
+                        o = float(under["price"].iloc[0]); bk = str(under["bookmaker_title"].iloc[0])
+                        k = int(math.floor(ln))
+                        pk = math.exp(-mu); cdf = pk
+                        for i in range(1, k+1):
+                            pk = pk * mu / i; cdf += pk
+                        p_over = max(0.0, min(1.0, 1 - cdf))
+                        p = 1 - p_over
+                        ev = p*o - 1.0
+                        opts.append(("Under", ln, o, bk, p, ev))
+                if opts:
+                    pick = max(opts, key=lambda x: x[5])
+                    pick_totals = {"selection": f"{pick[0]} {pick[1]:g}", "price": pick[2], "bookmaker": pick[3],
+                                   "model_prob": pick[4], "ev": pick[5]}
+            else:
+                row = sub.sort_values("price", ascending=False).head(1).iloc[0]
+                pick_totals = {"selection": f"{row['outcome'].title()} {row['point_f']:g}",
+                               "price": float(row["price"]), "bookmaker": str(row["bookmaker_title"]),
+                               "model_prob": None, "ev": None}
+            if pick_totals:
+                best["totals"] = pick_totals
 
-            per_game.append({
-                "match_id": int(mid) if pd.notna(mid) else None,
-                "home_team": mrow.get("home_team"),
-                "away_team": mrow.get("away_team"),
-                "kickoff_uk": iso_or_none(mrow.get("kickoff_uk")),
-                "kickoff_utc": iso_or_none(mrow.get("kickoff_utc")) if "kickoff_utc" in mrow else None,
-                "match_result": _top_by_ev(m1x2, 3),  # up to 3 best H/D/A
-                "btts": (
-                    _top_by_ev(mbtts[mbtts["selection"].str.lower().eq("yes")], 1) +
-                    _top_by_ev(mbtts[mbtts["selection"].str.lower().eq("no")],  1)
-                ),
-                "over_under": _select_totals_lines(mtotals, center=2.5, max_lines=3),
-                "match_score": _top_by_ev(mcs, 3),    # top 3 correct scores
-            })
+        # --- Asian handicap (all lines) ---
+        sub = ah_best[ah_best["match_id"].eq(mid)].copy()
+        if not sub.empty:
+            pick_ah = None
+            if lh is not None:
+                grid = cs_grid(lh, la, kmax=args.grid_k, rho=args.dc_rho)
+                sk = skellam_from_grid(grid)
+                opts = []
+                for (ln, side), grp in sub.groupby(["point_f","side"]):
+                    row = grp.sort_values("price", ascending=False).head(1).iloc[0]
+                    o = float(row["price"]); bk = str(row["bookmaker_title"])
+                    ev = ev_handicap(o, sk, float(ln), side.lower())
+                    opts.append((f"{'Home' if side=='home' else 'Away'} {ln:+g}", o, bk, None, ev))
+                if opts:
+                    best_ev = max(opts, key=lambda x: x[4])
+                    pick_ah = {"selection": best_ev[0], "price": best_ev[1], "bookmaker": best_ev[2],
+                               "model_prob": best_ev[3], "ev": best_ev[4]}
+            else:
+                row = sub.sort_values("price", ascending=False).head(1).iloc[0]
+                pick_ah = {"selection": f"{row['side'].title()} {row['point_f']:+g}",
+                           "price": float(row["price"]), "bookmaker": str(row["bookmaker_title"]),
+                           "model_prob": None, "ev": None}
+            if pick_ah:
+                best["asian_handicap"] = pick_ah
 
-    # -------- singles: top 10 --------
-    top10 = cand_df.head(10).copy()
+        # --- Match score (Correct Score) ---
+        sub = cs_best[cs_best["match_id"].eq(mid)].copy()
+        if not sub.empty:
+            pick_cs = None
+            if lh is not None:
+                grid = cs_grid(lh, la, kmax=args.cs_k_max, rho=args.dc_rho)
+                sub2 = sub.copy()
+                sub2["sc_h"] = pd.to_numeric(sub2["sc_h"], errors="coerce")
+                sub2["sc_a"] = pd.to_numeric(sub2["sc_a"], errors="coerce")
+                sub2 = sub2.dropna(subset=["sc_h","sc_a"])
+                sub2 = sub2[(sub2["sc_h"]<=args.cs_k_max) & (sub2["sc_a"]<=args.cs_k_max)]
+                if not sub2.empty:
+                    sub2["p"] = sub2.apply(lambda r: float(grid[int(r["sc_h"]), int(r["sc_a"])]), axis=1)
+                    sub2["ev"] = sub2["p"]*sub2["price"] - 1.0
+                    row = sub2.sort_values("ev", ascending=False).head(1).iloc[0]
+                    pick_cs = {"selection": f"{int(row['sc_h'])}-{int(row['sc_a'])}",
+                               "price": float(row["price"]), "bookmaker": str(row["bookmaker_title"]),
+                               "model_prob": float(row["p"]), "ev": float(row["ev"])}
+            if pick_cs is None:
+                sub["sc_h"] = pd.to_numeric(sub["sc_h"], errors="coerce")
+                sub["sc_a"] = pd.to_numeric(sub["sc_a"], errors="coerce")
+                sub = sub.dropna(subset=["sc_h","sc_a"])
+                row = sub.sort_values("price", ascending=False).head(1).iloc[0]
+                pick_cs = {"selection": f"{int(row['sc_h'])}-{int(row['sc_a'])}",
+                           "price": float(row["price"]), "bookmaker": str(row["bookmaker_title"]),
+                           "model_prob": None, "ev": None}
+            best["match_score"] = pick_cs
 
-    # -------- accas: best leg per match, then combos --------
-    best_by_match = (cand_df.sort_values(["match_id","score","kelly"], ascending=[True, False, False])
-                            .groupby("match_id", as_index=False).first())
-    legs = best_by_match.to_dict(orient="records")
-    M = len(legs)
+        out_rows.append({**meta, "best_value_picks": best})
 
-    accas = []
-    if M >= MIN_ACC_LEGS:
-        sizes = []
-        if M >= PREF_ACC_LEGS: sizes.append(PREF_ACC_LEGS)
-        if M >= 4: sizes.append(4)
-        if not sizes: sizes = [min(M, MIN_ACC_LEGS)]
-
-        combos = []
-        for r in sizes:
-            for combo in itertools.combinations(legs, r):
-                probs = [c["model_prob"] for c in combo]
-                odds  = [c["best_odds"]  for c in combo]
-                if any(pd.isna(p) or pd.isna(o) or o <= 1.0 for p,o in zip(probs,odds)):
-                    continue
-                prod_p = float(np.prod(probs))
-                prod_o = float(np.prod(odds))
-                ev = prod_p * prod_o - 1.0
-                combos.append({
-                    "legs": combo, "legs_count": r,
-                    "acca_prob": prod_p, "acca_odds": prod_o,
-                    "score": ev
-                })
-        combos = sorted(combos, key=lambda x: (x["score"], x["acca_prob"]), reverse=True)
-        for c in combos[:5]:
-            accas.append({
-                "legs_count": c["legs_count"],
-                "acca_prob": c["acca_prob"],
-                "acca_odds": c["acca_odds"],
-                "score": c["score"],
-                "legs": [
-                    {
-                        "home_team": l["home_team"], "away_team": l["away_team"],
-                        "kickoff_uk": l["kickoff_uk"],
-                        "market": l["market"], "selection": l["selection"],
-                        "odds": l["best_odds"], "p": l["model_prob"],
-                        "bookmaker": l["best_bookmaker"]
-                    } for l in c["legs"]
-                ]
-            })
-
-    # -------- write JSON --------
+    # ---- write JSON ----
+    outdir = Path(args.outdir); outdir.mkdir(parents=True, exist_ok=True)
+    out_json = outdir / f"all_market_picks_next_epl_{season}_mw{mws[0]:02d}.json"
     payload = {
         "generated_at_utc": pd.Timestamp.now(tz="UTC").isoformat(),
-        "window_uk": {"start": iso_or_none(start_uk), "end": iso_or_none(end_uk)},
-        "epl_matchweek": {
-            "season": season_year,
-            "mw_mode": mw_mode,
-            "mw_range": [mw_min, mw_max] if (mw_min is not None and mw_max is not None) else None
-        },
-        "singles_count": int(len(top10)),
-        "accas_count": int(len(accas)),
-        "singles": top10.to_dict(orient="records"),
-        "accas": accas,
-        "per_game_markets": per_game,   # <-- NEW
+        "epl_matchweek": {"season": season, "mw": mws},
+        "window_uk": {"start": iso_or_none(fixtures['kickoff_uk'].min()), "end": iso_or_none(fixtures['kickoff_uk'].max())},
+        "matches_count": len(out_rows),
+        "matches": out_rows
     }
     with open(out_json, "w", encoding="utf-8") as f:
         json.dump(payload, f, indent=2, ensure_ascii=False)
 
-    # -------- preview --------
-    print(f"[done] singles={len(top10)} accas={len(accas)} → {out_json}")
-    if len(top10):
-        cols = ["home_team","away_team","market","selection","best_odds","model_prob","score","kelly","kickoff_uk"]
-        print("\nTop 10 singles:")
-        print(top10[cols].head(10).to_string(index=False))
-    if len(accas):
-        print("\nTop 5 accas (best EV):")
-        for i, a in enumerate(accas, 1):
-            legs_str = " | ".join([f'{l["home_team"]}–{l["away_team"]} {l["market"]} {l["selection"]} @{l["odds"]:.2f}'
-                                   for l in a["legs"]])
-            print(f"{i}. {a['legs_count']}-fold @ {a['acca_odds']:.2f} | EV={a['score']:+.3f} | {legs_str}")
+    print(f"[done] wrote {out_json} with {len(out_rows)} matches")
 
 if __name__ == "__main__":
     main()

@@ -1,317 +1,367 @@
 #!/usr/bin/env python3
-import json
+"""
+odds_next_mw_to_json.py  —  BEST PRICES per match (robust parsing)
+
+Reads a saved EPL odds parquet (e.g. epl_odds_2025_MW04.parquet) and outputs JSON with
+the best available odds for these markets:
+
+- Match Result (h2h / h2h_3_way): best {home, draw, away}
+- BTTS (Yes/No): best {yes, no}
+- Totals (Over/Under): best per line, e.g. {"2.5": {"over": {...}, "under": {...}}, ...}
+- Asian Handicap: best per line, e.g. {"+0.25": {"home": {...}, "away": {...}}, ...}
+- Correct Score: top-K (default 10) best scorelines overall
+
+The script is tolerant to naming/format differences:
+- Detects markets by regex (e.g., "btts" or "both teams to score").
+- If `point` is missing, it tries to parse the line from outcome / outcome_name / market strings.
+- Normalises team-name outcomes to "home"/"away".
+- Normalises scoreline text to "H-A".
+
+Output file:
+  ../data/output/odds/bookmaker_odds_compared_<SEASON>_MWnn.json
+
+CLI:
+  --odds-file PATH      read this parquet (recommended)
+  --odds-dir  DIR       if odds-file omitted, auto-pick newest epl_odds_YYYY_MWnn.parquet in DIR
+  --outdir    DIR       output directory (default ../data/output/odds)
+  --cs-topk   N         top-K correct scores to include (default 10)
+  --debug               add diagnostics per match (markets seen) and print extra logs
+"""
+
+from __future__ import annotations
+import argparse, re, json
 from pathlib import Path
-from datetime import timedelta
-from typing import List, Optional, Tuple, Dict, Any, Set
+from typing import List, Dict, Optional, Tuple
 
 import pandas as pd
-import numpy as np
-import requests
 
-# -------- paths --------
-ODDS_PARQUET = Path("../data/raw/odds/odds.parquet")
-OUT_DIR      = Path("../data/output/odds")  # directory; final filename is built with season + MW
+FILENAME_RX = re.compile(r"epl_odds_(\d{4})_MW(\d{2})(?:-MW(\d{2}))?\.parquet$", re.IGNORECASE)
 
-# -------- external endpoints (no keys) --------
-FPL_FIXTURES = "https://fantasy.premierleague.com/api/fixtures/"
-ESPN_SCOREBOARD = "https://site.api.espn.com/apis/site/v2/sports/soccer/eng.1/scoreboard"
-
-# -------- time / naming helpers --------
+# ---------- time / path helpers ----------
 def to_uk(ts):
     t = pd.to_datetime(ts, utc=True, errors="coerce")
     if isinstance(t, pd.Series):
         return t.dt.tz_convert("Europe/London")
     return t.tz_convert("Europe/London")
 
-def season_start_year_from_date(d_uk: pd.Timestamp) -> int:
-    """PL season starts in Aug. Aug–Dec => same year; Jan–May => previous year."""
-    return int(d_uk.year if d_uk.month >= 8 else d_uk.year - 1)
-
-def build_output_path_with_mw(out_dir: Path,
-                              dt_min_uk: pd.Timestamp,
-                              dt_max_uk: pd.Timestamp,
-                              mw_numbers: List[int],
-                              prefix: str = "bookmaker_odds_compared") -> Path:
-    """
-    Create <prefix>_<season>_MWxx.json (or MWxx-MWyy if spanning) under out_dir.
-    Fallback slug: YYYYMMDD-YYYYMMDD if MW unknown.
-    """
-    out_dir.mkdir(parents=True, exist_ok=True)
-    season = season_start_year_from_date(dt_min_uk)
-    if mw_numbers:
-        slug = f"MW{mw_numbers[0]:02d}" if len(mw_numbers) == 1 else f"MW{mw_numbers[0]:02d}-MW{mw_numbers[-1]:02d}"
+def build_output_path(outdir: Path, season: int, mws: List[int], prefix="bookmaker_odds_compared") -> Path:
+    outdir.mkdir(parents=True, exist_ok=True)
+    if mws:
+        slug = f"MW{mws[0]:02d}" if len(mws) == 1 else f"MW{mws[0]:02d}-MW{mws[-1]:02d}"
     else:
-        slug = f"{dt_min_uk.strftime('%Y%m%d')}-{dt_max_uk.strftime('%Y%m%d')}"
-    return out_dir / f"{prefix}_{season}_{slug}.json"
+        slug = "MW"
+    return outdir / f"{prefix}_{season}_{slug}.json"
 
-# -------- MW inference (FPL first, ESPN fallback) --------
-def infer_matchweeks_from_fpl(date_from_uk: pd.Timestamp,
-                              date_to_uk: pd.Timestamp) -> List[int]:
-    """
-    Use FPL fixtures (public) to get unique 'event' numbers (GW) within the window.
-    """
-    try:
-        r = requests.get(FPL_FIXTURES, timeout=20)
-        r.raise_for_status()
-        fixtures = r.json()
-        if not isinstance(fixtures, list):
-            return []
-    except Exception:
-        return []
+def pick_latest_odds_file(odds_dir: Path) -> Path:
+    cand = []
+    for p in odds_dir.glob("epl_odds_*_MW*.parquet"):
+        m = FILENAME_RX.search(p.name)
+        if not m: continue
+        season = int(m.group(1))
+        mw1 = int(m.group(2))
+        mw2 = int(m.group(3)) if m.group(3) else mw1
+        cand.append((season, mw2, p.stat().st_mtime, p))
+    if not cand:
+        raise FileNotFoundError(f"No files like epl_odds_YYYY_MWnn.parquet found in {odds_dir}")
+    cand.sort(key=lambda x: (x[0], x[1], x[2]), reverse=True)
+    return cand[0][3]
 
-    dmin = min(date_from_uk, date_to_uk)
-    dmax = max(date_from_uk, date_to_uk)
-    mws: Set[int] = set()
-    for fx in fixtures:
-        ev = fx.get("event")
-        ko = fx.get("kickoff_time")
-        if ev is None or not ko:
-            continue
-        ko_uk = to_uk(pd.Timestamp(ko))
-        if dmin <= ko_uk <= dmax:
-            try:
-                mws.add(int(ev))
-            except Exception:
-                pass
-    return sorted(mws)
+def parse_season_mw_from_filename(path: Path) -> tuple[int, list[int]]:
+    m = FILENAME_RX.search(path.name)
+    if not m:
+        raise ValueError(f"Filename doesn't match epl_odds_YYYY_MWnn.parquet: {path.name}")
+    season = int(m.group(1))
+    mw1 = int(m.group(2))
+    mw2 = int(m.group(3)) if m.group(3) else mw1
+    mws = list(range(mw1, mw2+1))
+    return season, mws
 
-def _espn_fetch_day(date_str: str) -> Optional[dict]:
-    """Try YYYYMMDD (primary) then YYYY-MM-DD (fallback)."""
-    for d in (date_str, f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:]}"):
-        try:
-            r = requests.get(ESPN_SCOREBOARD, params={"dates": d}, timeout=20)
-            if r.status_code == 404:
-                continue
-            r.raise_for_status()
-            return r.json()
-        except Exception:
-            continue
+# ---------- robust normalisation ----------
+RX_BETWEEN_NUM = re.compile(r"([+-]?\d+(?:\.\d+)?)")
+RX_SCORE = re.compile(r"(\d+)\D+(\d+)")
+
+def _norm_lower(s) -> str:
+    return str(s).strip().lower() if pd.notna(s) else ""
+
+def _market_bucket(market: str) -> Optional[str]:
+    m = _norm_lower(market)
+    if m in ("h2h","h2h_3_way","h2h 3 way"): return "h2h"
+    if "both teams" in m and "score" in m:    return "btts"
+    if "btts" in m:                            return "btts"
+    if "total" in m:                           return "totals"
+    if "asian" in m or "handicap" in m or "spread" in m or m == "ah": return "asian_handicap"
+    if "correct" in m and "score" in m:        return "correct_score"
+    if m in ("correct_score","cs"):            return "correct_score"
     return None
 
-def _extract_mw_from_competition(comp: dict) -> Optional[int]:
-    # Try round.number or week.number first
-    for path in [("round", "number"), ("week", "number")]:
-        d = comp
-        ok = True
-        for k in path:
-            if not isinstance(d, dict) or k not in d:
-                ok = False; break
-            d = d[k]
-        if ok:
+def _parse_line_from_text(*txts) -> Optional[float]:
+    """
+    Try to extract a numeric line from any of the provided strings
+    (e.g., 'Over 2.5', 'Arsenal -0.5', 'AH +0.25').
+    """
+    for t in txts:
+        s = _norm_lower(t)
+        if not s: continue
+        m = RX_BETWEEN_NUM.search(s)
+        if m:
             try:
-                return int(d)
+                return float(m.group(1))
             except Exception:
                 pass
-    # Parse text fallback (e.g., "Round 3")
-    for path in [("round", "text"), ("round", "name"), ("week", "text")]:
-        d = comp
-        for k in path:
-            if isinstance(d, dict) and k in d:
-                d = d[k]
-            else:
-                d = None; break
-        if isinstance(d, str):
-            m = pd.Series([d]).str.extract(r"(\d+)").iloc[0, 0]
-            if pd.notna(m):
-                return int(m)
     return None
 
-def infer_matchweeks_from_espn(date_from_uk: pd.Timestamp,
-                               date_to_uk: pd.Timestamp) -> List[int]:
-    dmin = min(date_from_uk, date_to_uk)
-    dmax = max(date_from_uk, date_to_uk)
-    mws: Set[int] = set()
-    for day in pd.date_range(dmin.date(), dmax.date(), freq="D"):
-        ds = day.strftime("%Y%m%d")
-        data = _espn_fetch_day(ds)
-        if not data:
-            continue
-        events = data.get("events", []) or []
-        for ev in events:
-            comps = ev.get("competitions", []) or []
-            if not comps:
-                continue
-            mw = _extract_mw_from_competition(comps[0])
-            if isinstance(mw, int):
-                mws.add(mw)
-    return sorted(mws)
+def _norm_side(outcome: str, home: str, away: str) -> Optional[str]:
+    o = _norm_lower(outcome)
+    h = _norm_lower(home)
+    a = _norm_lower(away)
+    if o in ("home","away"): return o
+    if h and (o == h or h in o): return "home"
+    if a and (o == a or a in o): return "away"
+    return None
 
-# -------- existing logic (unchanged) --------
-def load_and_filter_next7_epl(odds: pd.DataFrame) -> pd.DataFrame:
-    """Filter raw odds to EPL fixtures in the next 7 days (UTC)."""
-    df = odds.copy()
-    df["commence_time"] = pd.to_datetime(df["commence_time"], utc=True, errors="coerce")
+def _norm_yesno(outcome: str) -> Optional[str]:
+    o = _norm_lower(outcome)
+    if o in ("yes","y"): return "yes"
+    if o in ("no","n"):  return "no"
+    return None
 
-    now_utc = pd.Timestamp.now(tz="UTC")
-    end_utc = now_utc + timedelta(days=7)
-    df = df[(df["commence_time"] >= now_utc) & (df["commence_time"] <= end_utc)]
+def _norm_ou(outcome: str) -> Optional[str]:
+    o = _norm_lower(outcome)
+    if o.startswith("over"):  return "over"
+    if o.startswith("under"): return "under"
+    return None
 
-    # EPL filter (robust across feeds)
-    masks = []
-    if "sport_key" in df.columns:
-        sk = df["sport_key"].astype(str).str.lower()
-        masks.append(sk.eq("soccer_epl") | sk.str.contains("epl", na=False) | sk.str.contains("england.*premier", na=False))
-    if "league_title" in df.columns:
-        lt = df["league_title"].astype(str).str.lower()
-        masks.append(lt.str.contains("premier league", na=False) & lt.str.contains("england|english", na=False))
+def _norm_score(outcome: str, outcome_name: str) -> Optional[str]:
+    # Prefer any "H-A" numeric inside either field
+    for s in (outcome, outcome_name):
+        text = str(s) if pd.notna(s) else ""
+        m = RX_SCORE.search(text)
+        if m:
+            return f"{int(m.group(1))}-{int(m.group(2))}"
+    return None
 
-    if masks:
-        m = masks[0]
-        for mm in masks[1:]:
-            m = m | mm
-        df = df[m].copy()
-
-    keep = [c for c in [
-        "match_id","commence_time","home_team","away_team",
-        "market","outcome","point","bookmaker_title","price"
-    ] if c in df.columns]
-    return df[keep].copy()
-
-def by_bookmaker_pivot(df: pd.DataFrame, index_cols, col_name="outcome", val="price"):
+def normalise_df(df: pd.DataFrame) -> pd.DataFrame:
     """
-    One row per bookmaker with columns per outcome (e.g., home/draw/away or yes/no).
-    Aggregates duplicate rows by taking max price per bookmaker/outcome.
-    Resilient to duplicate column names.
+    Adds:
+      - mkt_bucket          in {"h2h","btts","totals","asian_handicap","correct_score"}
+      - line_val            float (from point or parsed text), if applicable
+      - line_str            string: totals -> "2.5", AH -> "+0.25"
+      - outcome_norm        category per bucket:
+          * h2h:   home/draw/away (map team names to home/away if needed)
+          * btts:  yes/no
+          * totals: over/under
+          * AH:    home/away
+          * CS:    "H-A"
     """
-    if df.empty:
-        return pd.DataFrame(columns=index_cols + ["bookmaker_title"])
-    df = df.loc[:, ~df.columns.duplicated()].copy()  # avoid 1-D grouper errors
-    g = (df.groupby(index_cols + ["bookmaker_title", col_name])[val]
-           .max()
-           .unstack(col_name)
-           .reset_index())
-    return g
+    df = df.copy()
+    df["price"] = pd.to_numeric(df["price"], errors="coerce")
+    df = df[df["price"].notna() & (df["price"] > 1.0)]
+    for c in ("market","outcome","outcome_name","bookmaker_title","home_team","away_team"):
+        if c not in df.columns:
+            df[c] = None
 
-def collect_markets_for_match(df: pd.DataFrame) -> dict:
-    """Build nested dict of markets for a single match (df filtered by match_id)."""
-    out = {}
+    df["mkt_bucket"] = df["market"].apply(_market_bucket)
 
-    # ---- 1X2 (match result) ----
-    h2h = df[df["market"].isin(["h2h", "h2h_3_way"])]
-    if not h2h.empty:
-        h2h_bm = by_bookmaker_pivot(h2h, index_cols=[], col_name="outcome", val="price")
-        cols = [c for c in ["home", "draw", "away"] if c in h2h_bm.columns]
-        out["h2h"] = [
-            {"bookmaker": r["bookmaker_title"], **{k: float(r[k]) for k in cols if pd.notna(r[k])}}
-            for _, r in h2h_bm.iterrows()
-        ]
+    # Compute line for totals & AH (prefer 'point', else parse)
+    has_point = pd.to_numeric(df.get("point"), errors="coerce")
+    df["line_val"] = has_point
+    # Fill missing from text
+    fill_mask = df["line_val"].isna()
+    if fill_mask.any():
+        df.loc[fill_mask, "line_val"] = df.loc[fill_mask].apply(
+            lambda r: _parse_line_from_text(r.get("outcome"), r.get("outcome_name"), r.get("market")), axis=1
+        )
+    # Strings: totals plain, AH signed
+    df["line_str"] = df.apply(
+        lambda r: (None if pd.isna(r["line_val"]) else (f"{r['line_val']:+g}" if r["mkt_bucket"]=="asian_handicap" else f"{r['line_val']:g}")),
+        axis=1
+    )
 
-    # ---- BTTS (Yes/No) ----
-    btts = df[df["market"] == "btts"]
-    if not btts.empty:
-        btts = btts[btts["outcome"].isin(["yes", "no"])]
-        btts_bm = by_bookmaker_pivot(btts, index_cols=[], col_name="outcome", val="price")
-        cols = [c for c in ["yes", "no"] if c in btts_bm.columns]
-        out["btts"] = [
-            {"bookmaker": r["bookmaker_title"], **{k: float(r[k]) for k in cols if pd.notna(r[k])}}
-            for _, r in btts_bm.iterrows()
-        ]
+    # outcome_norm per bucket
+    out_norm = []
+    for _, r in df.iterrows():
+        bkt = r["mkt_bucket"]
+        if bkt == "h2h":
+            o = _norm_lower(r["outcome"])
+            if o not in ("home","draw","away"):
+                o = _norm_side(r["outcome"], r["home_team"], r["away_team"]) or o
+            out_norm.append(o if o in ("home","draw","away") else None)
+        elif bkt == "btts":
+            out_norm.append(_norm_yesno(r["outcome"]))
+        elif bkt == "totals":
+            out_norm.append(_norm_ou(r["outcome"]))
+        elif bkt == "asian_handicap":
+            out_norm.append(_norm_side(r["outcome"], r["home_team"], r["away_team"]))
+        elif bkt == "correct_score":
+            out_norm.append(_norm_score(r["outcome"], r["outcome_name"]))
+        else:
+            out_norm.append(None)
+    df["outcome_norm"] = out_norm
 
-    # ---- Totals (Over/Under by line/point) ----
-    # primary label "totals"; fall back to any market containing "total"
-    tot = df[(df["market"] == "totals") & (df["outcome"].isin(["over", "under"]))].copy()
-    if tot.empty:
-        tot = df[df["market"].astype(str).str.contains("total", case=False, na=False) &
-                 df["outcome"].isin(["over", "under"])].copy()
+    return df
 
-    if not tot.empty:
-        pts = pd.to_numeric(tot.get("point"), errors="coerce")
-        tot["point_str"] = pts.map(lambda x: None if pd.isna(x) else f"{x:g}")
-        tot = tot.dropna(subset=["point_str"])
+# ---------- best-pick helpers ----------
+def _best_row(rows: pd.DataFrame, price_col="price") -> Optional[dict]:
+    if rows.empty: return None
+    r = rows.loc[rows[price_col].astype(float).idxmax()]
+    return {"price": float(r[price_col]), "bookmaker": r.get("bookmaker_title")}
 
-        out["totals"] = {}
-        for pt, sub in tot.groupby("point_str", dropna=False):
-            # keep columns we need; do NOT rename to "point" (avoids duplicate-name grouper)
-            sub2 = sub[["bookmaker_title", "outcome", "price", "point_str"]].copy()
-            bm = by_bookmaker_pivot(sub2, index_cols=["point_str"], col_name="outcome", val="price")
-            cols = [c for c in ["over", "under"] if c in bm.columns]
-            out["totals"][pt] = [
-                {"bookmaker": r["bookmaker_title"], **{k: float(r[k]) for k in cols if pd.notna(r[k])}}
-                for _, r in bm.iterrows()
-            ]
+def _best_by_outcome(df: pd.DataFrame, outcomes: List[str]) -> Dict[str, Optional[dict]]:
+    out: Dict[str, Optional[dict]] = {}
+    for oc in outcomes:
+        sub = df[df["outcome_norm"] == oc]
+        out[oc] = _best_row(sub)
+    # drop keys that have no data at all
+    return {k: v for k, v in out.items() if v is not None}
 
-    # ---- Correct Score (match score) ----
-    cs = df[df["market"].astype(str).str.contains("correct", case=False, na=False)]
-    if cs.empty:
-        cs = df[df["market"].isin(["correct_score", "cs"])]
-    if not cs.empty:
-        # best price per bookmaker+scoreline
-        cs_best = (cs.groupby(["bookmaker_title", "outcome"])["price"]
-                     .max()
-                     .reset_index()
-                     .rename(columns={"outcome": "scoreline", "price": "odds"}))
-
-        books = []
-        for bk, sub in cs_best.groupby("bookmaker_title"):
-            books.append({
-                "bookmaker": bk,
-                "prices": [{"score": s["scoreline"], "price": float(s["odds"])} for _, s in sub.iterrows()]
-            })
-        out["correct_score"] = books
-
+def _best_by_line_two_way(df: pd.DataFrame, outcomes=("over","under")) -> Dict[str, dict]:
+    out: Dict[str, dict] = {}
+    if df.empty: return out
+    df2 = df.dropna(subset=["line_str"])
+    for line, sub in df2.groupby("line_str", dropna=False):
+        bests = {}
+        for oc in outcomes:
+            ss = sub[sub["outcome_norm"] == oc]
+            b = _best_row(ss)
+            if b is not None: bests[oc] = b
+        if bests:
+            out[str(line)] = bests
     return out
 
-# -------- main --------
+def collect_best_markets_for_match(df_norm: pd.DataFrame, cs_topk: int, debug: bool=False) -> Tuple[dict, dict]:
+    """
+    Returns (markets_best, diag)
+      markets_best: dict with h2h, btts, totals, asian_handicap, correct_score
+      diag: diagnostics (unique raw market labels present) for debugging
+    """
+    diag = {}
+    if debug:
+        diag["markets_seen"] = (
+            df_norm["market"].dropna().astype(str).str.lower().value_counts().to_dict()
+        )
+
+    out = {}
+
+    # H2H
+    h2h = df_norm[df_norm["mkt_bucket"]=="h2h"]
+    if not h2h.empty:
+        bests = _best_by_outcome(h2h, ["home","draw","away"])
+        if bests: out["h2h"] = bests
+
+    # BTTS
+    btts = df_norm[df_norm["mkt_bucket"]=="btts"]
+    if not btts.empty:
+        bests = _best_by_outcome(btts, ["yes","no"])
+        if bests: out["btts"] = bests
+
+    # Totals
+    tot = df_norm[(df_norm["mkt_bucket"]=="totals") & df_norm["outcome_norm"].isin(["over","under"])]
+    if not tot.empty:
+        tb = _best_by_line_two_way(tot, outcomes=("over","under"))
+        if tb: out["totals"] = tb
+
+    # Asian Handicap
+    ah = df_norm[(df_norm["mkt_bucket"]=="asian_handicap") & df_norm["outcome_norm"].isin(["home","away"])]
+    if not ah.empty:
+        ab = _best_by_line_two_way(ah, outcomes=("home","away"))
+        if ab: out["asian_handicap"] = ab
+
+    # Correct Score (top-K)
+    cs = df_norm[(df_norm["mkt_bucket"]=="correct_score") & df_norm["outcome_norm"].notna()]
+    if not cs.empty:
+        # best price per score
+        cs_best = (cs.groupby("outcome_norm")["price"].max().reset_index())
+        cs_best = cs_best.rename(columns={"outcome_norm":"score","price":"price"}).sort_values("price", ascending=False)
+        merged = cs.merge(cs_best, left_on=["outcome_norm","price"], right_on=["score","price"], how="inner")
+        merged = merged.sort_values(["price"], ascending=False).drop_duplicates(subset=["score"])
+        merged = merged[["score","price","bookmaker_title"]].head(cs_topk)
+        if len(merged):
+            out["correct_score"] = [
+                {"score": str(r["score"]), "price": float(r["price"]), "bookmaker": r["bookmaker_title"]}
+                for _, r in merged.iterrows()
+            ]
+
+    return out, diag
+
+# ---------- main ----------
 def main():
-    if not ODDS_PARQUET.exists():
-        raise FileNotFoundError(f"{ODDS_PARQUET} not found")
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--odds-file", default="", help="Exact parquet to load (e.g. ../data/raw/odds/epl_odds_2025_MW04.parquet)")
+    ap.add_argument("--odds-dir",  default="../data/raw/odds", help="Directory to auto-detect newest epl_odds_YYYY_MWnn.parquet")
+    ap.add_argument("--outdir",    default="../data/output/odds", help="Output directory")
+    ap.add_argument("--cs-topk",   type=int, default=10, help="Top-K correct score selections per match")
+    ap.add_argument("--debug", action="store_true")
+    args = ap.parse_args()
 
-    raw = pd.read_parquet(ODDS_PARQUET)
-    odds7 = load_and_filter_next7_epl(raw)
-
-    fixtures = (odds7[["match_id", "commence_time", "home_team", "away_team"]]
-                .drop_duplicates("match_id")
-                .rename(columns={"commence_time": "kickoff_utc"}))
-    fixtures["kickoff_uk"] = fixtures["kickoff_utc"].dt.tz_convert("Europe/London")
-
-    # Determine window for naming
-    if fixtures.empty:
-        # If no fixtures, use next 7-day window for naming
-        now_uk = pd.Timestamp.now(tz="Europe/London")
-        dt_min_uk = now_uk
-        dt_max_uk = now_uk + pd.Timedelta(days=7)
+    # choose file
+    if args.odds_file:
+        odds_path = Path(args.odds_file)
+        if not odds_path.exists():
+            raise FileNotFoundError(f"{odds_path} not found")
     else:
-        dt_min_uk = fixtures["kickoff_uk"].min()
-        dt_max_uk = fixtures["kickoff_uk"].max()
+        odds_path = pick_latest_odds_file(Path(args.odds_dir))
 
-    # Infer MWs (FPL first, ESPN fallback)
-    mws = infer_matchweeks_from_fpl(dt_min_uk, dt_max_uk)
-    if not mws:
-        mws = infer_matchweeks_from_espn(dt_min_uk, dt_max_uk)
+    season, mws = parse_season_mw_from_filename(odds_path)
+    if args.debug:
+        print(f"[info] using odds file: {odds_path.name} (season={season}, MW={mws})")
 
-    out_path = build_output_path_with_mw(OUT_DIR, dt_min_uk, dt_max_uk, mws)
+    # load
+    df = pd.read_parquet(odds_path)
+    need = {"match_id","commence_time","home_team","away_team","market","outcome","bookmaker_title","price"}
+    missing = [c for c in need if c not in df.columns]
+    if missing:
+        raise ValueError(f"Parquet missing required columns: {missing}")
+
+    # time
+    df["commence_time"] = pd.to_datetime(df["commence_time"], utc=True, errors="coerce")
+
+    # normalise once
+    df_norm = normalise_df(df)
+
+    # fixtures
+    fixtures = (df[["match_id","commence_time","home_team","away_team"]]
+                .drop_duplicates("match_id")
+                .rename(columns={"commence_time":"kickoff_utc"}))
+    fixtures["kickoff_uk"] = to_uk(fixtures["kickoff_utc"])
 
     payload = {
         "generated_at_utc": pd.Timestamp.now(tz="UTC").isoformat(),
         "fixtures_count": int(len(fixtures)),
-        "matchweeks": mws if mws else None,
+        "matchweeks": mws,
+        "window_uk": {
+            "start": fixtures["kickoff_uk"].min().isoformat() if len(fixtures) else None,
+            "end":   fixtures["kickoff_uk"].max().isoformat() if len(fixtures) else None,
+        },
         "fixtures": []
     }
 
-    by_match = dict(tuple(odds7.groupby("match_id", sort=False)))
+    by_match = dict(tuple(df_norm.groupby("match_id", sort=False)))
 
     for _, fx in fixtures.sort_values("kickoff_utc").iterrows():
         mid = fx["match_id"]
+        sub = by_match.get(mid, pd.DataFrame(columns=df_norm.columns))
+        markets_best, diag = collect_best_markets_for_match(sub, cs_topk=args.cs_topk, debug=args.debug)
         md = {
-            "match_id": int(mid) if pd.notna(mid) and str(mid).isdigit() else str(mid),
-            "kickoff_utc": fx["kickoff_utc"].isoformat(),
+            "match_id": int(mid) if pd.notna(mid) and str(mid).isdigit() else (None if pd.isna(mid) else str(mid)),
+            "kickoff_utc": fx["kickoff_utc"].isoformat() if pd.notna(fx["kickoff_utc"]) else None,
             "kickoff_uk": fx["kickoff_uk"].isoformat() if pd.notna(fx["kickoff_uk"]) else None,
-            "home_team": fx["home_team"],
-            "away_team": fx["away_team"],
-            "markets": {}
+            "home_team": fx.get("home_team"),
+            "away_team": fx.get("away_team"),
+            "markets_best": markets_best
         }
-        df_m = by_match.get(mid, pd.DataFrame(columns=odds7.columns))
-        md["markets"] = collect_markets_for_match(df_m)
+        if args.debug:
+            md["debug"] = diag
         payload["fixtures"].append(md)
 
+    out_path = build_output_path(Path(args.outdir), season, mws)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     with open(out_path, "w", encoding="utf-8") as f:
         json.dump(payload, f, indent=2, ensure_ascii=False)
 
     print(f"[done] wrote {out_path}")
-    print(f"[info] fixtures included (EPL, next 7 days): {payload['fixtures_count']}")
-    if mws:
-        print(f"[info] inferred matchweek(s): {mws}")
+    if args.debug:
+        print(f"[debug] fixtures={payload['fixtures_count']} | season={season} | MW={mws} | "
+              f"window_uk={payload['window_uk']['start']} → {payload['window_uk']['end']}")
 
 if __name__ == "__main__":
     main()

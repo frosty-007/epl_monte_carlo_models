@@ -1,73 +1,51 @@
 #!/usr/bin/env python3
 """
-10.best_picks_review.py  (MATCHWEEK + ESPN-ONLY, FIXED 2025 INPUT SCHEME)
+10.best_picks_review.py — ESPN-only grading (robust window; NaN-free; grade_status)
 
-What it does
-------------
-Grades picks (singles + accas) using **ESPN public scoreboard** results only (no API keys).
-Input picks file is fixed to the 2025 season naming scheme:
-
-  ../data/output/picks/picks_next_epl_2025_mwNN.json
-
-…where NN is the **matchweek** provided via CLI (--mw). Output uses:
-
-  ../data/output/pick_analysis/epl_2025_mwNN_pick_analysis.json
-
-Notes
------
-- All legacy "round" logic is removed; the script is matchweek-first.
-- ESPN’s endpoint doesn’t expose matchweek; we use your CLI arg for naming and propagate
-  a `matchweek` field in outputs with that value when helpful (results themselves come
-  from ESPN and don’t contain MW numbers).
-- Matching uses exact (home, away, date), swapped home/away, nearest kickoff within ±2 days,
-  and light fuzzy name matching.
-
-Usage
------
-  python 10.best_picks_review.py --mw 7
-  python 10.best_picks_review.py --mw 7 --debug
-  python 10.best_picks_review.py --mw 7 --out ../data/output/pick_analysis/custom.json
-
-Requires
---------
-  pip install pandas numpy requests
+- Loads picks: ../data/output/picks/picks_next_epl_2025_mwNN.json
+- Uses picks' own kickoff window (min..max ±2d, UK) to fetch ESPN results for matching.
+- MW is for naming & summary only (from filename by default; override with --mw or --infer-mw).
+- Matching passes: exact (home/away/date), swapped, unordered pair ±2d (nearest KO),
+  fuzzy names ±2d (nearest KO).
+- Outputs NaN-free JSON and per-pick grade_status: graded | pending_result | no_match.
 """
 
 from __future__ import annotations
-
-import argparse
-import json
-import re
+import argparse, json, math, re
 from pathlib import Path
-from typing import List, Optional, Tuple, Dict, Any
-
+from typing import Optional, Tuple
+from datetime import datetime, date, timedelta
 import numpy as np
 import pandas as pd
-from datetime import datetime, date
 from difflib import SequenceMatcher
 
-# ---------- Config ----------
-SEASON_FOR_NAME = 2025  # fixed season naming per request
+SEASON_FOR_NAME = 2025
 DEFAULT_PICKS_DIR = Path("../data/output/picks")
 DEFAULT_OUT_DIR   = Path("../data/output/pick_analysis")
 
-# ---------- JSON helper ----------
+# ---------------- JSON helpers ----------------
 def _json_default(o):
-    if isinstance(o, pd.Timestamp):
-        return None if pd.isna(o) else o.isoformat()
-    if isinstance(o, pd.Timedelta):
-        return str(o)
-    if isinstance(o, np.integer):
-        return int(o)
+    if isinstance(o, pd.Timestamp): return None if pd.isna(o) else o.isoformat()
+    if isinstance(o, pd.Timedelta): return str(o)
+    if isinstance(o, np.integer):   return int(o)
     if isinstance(o, np.floating):
-        return float(o)
-    if isinstance(o, np.bool_):
-        return bool(o)
-    if isinstance(o, (datetime, date)):
-        return o.isoformat()
-    return str(o)
+        f = float(o); return None if (math.isnan(f) or math.isinf(f)) else f
+    if isinstance(o, np.bool_):     return bool(o)
+    if isinstance(o, (datetime, date)): return o.isoformat()
+    return None
 
-# ---------- Canonicalization ----------
+def _sanitize(obj):
+    if obj is None: return None
+    if isinstance(obj, float): return None if (math.isnan(obj) or math.isinf(obj)) else obj
+    if isinstance(obj, np.floating):
+        f = float(obj); return None if (math.isnan(f) or math.isinf(f)) else f
+    if isinstance(obj, np.integer): return int(obj)
+    if obj is pd.NA: return None
+    if isinstance(obj, dict):  return {k: _sanitize(v) for k,v in obj.items()}
+    if isinstance(obj, (list, tuple)): return [_sanitize(v) for v in obj]
+    return obj
+
+# ---------------- Canonicalization ----------------
 def canon_team(s: str) -> str:
     s0 = (s or "").lower()
     s1 = re.sub(r"[^a-z0-9]+", "", s0)
@@ -79,7 +57,7 @@ def canon_team(s: str) -> str:
         "arsenal":"arsenal","chelsea":"chelsea","liverpool":"liverpool",
         "westhamunited":"westham","westham":"westham","hammers":"westham",
         "newcastleunited":"newcastle","newcastle":"newcastle","magpies":"newcastle",
-        "brightonandhovealbion":"brighton","brightonhovealbion":"brighton","brighton":"brighton","seagulls":"brighton",
+        "brightonandhovealbion":"brighton","brightonhovealbion":"brighton","brighton":"brighton",
         "wolverhamptonwanderers":"wolves","wolverhampton":"wolves","wolves":"wolves",
         "nottinghamforest":"forest","nottmforest":"forest","forest":"forest",
         "sheffieldunited":"sheffieldutd","sheffieldutd":"sheffieldutd","sheffutd":"sheffieldutd",
@@ -94,30 +72,6 @@ def canon_team(s: str) -> str:
     }
     return syn.get(s1, s1)
 
-# ---------- CLI ----------
-def parse_args():
-    ap = argparse.ArgumentParser(description="Grade picks using ESPN (matchweek-first; ESPN-only; fixed 2025 input).")
-    ap.add_argument("--mw", type=int, required=True,
-                    help="EPL matchweek (1..38). Input will be ../data/output/picks/picks_next_epl_2025_mwNN.json")
-    ap.add_argument("--out", type=Path, default=None,
-                    help=f"Output graded JSON (default {DEFAULT_OUT_DIR}/epl_2025_mwNN_pick_analysis.json)")
-    ap.add_argument("--debug", action="store_true", help="Print extra logs and write debug_unmatched.csv")
-    return ap.parse_args()
-
-# ---------- Picks I/O ----------
-def load_picks_json(p: Path) -> dict:
-    with open(p, "r", encoding="utf-8") as f:
-        return json.load(f)
-
-def resolve_fixed_2025_picks_path(mw: int, base_dir: Path = DEFAULT_PICKS_DIR) -> Path:
-    if mw < 1 or mw > 38:
-        raise ValueError(f"matchweek must be 1..38, got {mw}")
-    p = base_dir / f"picks_next_epl_{SEASON_FOR_NAME}_mw{mw:02d}.json"
-    if not p.exists():
-        raise FileNotFoundError(f"Picks file not found: {p}")
-    return p
-
-# ---------- Utilities ----------
 def _ratio(a: str, b: str) -> float:
     if not a or not b: return 0.0
     return SequenceMatcher(None, a.lower(), b.lower()).ratio()
@@ -131,19 +85,64 @@ def _nearest_by_dt(cand: pd.DataFrame, ref_dt: pd.Timestamp) -> pd.Series:
     cand["abs_diff"] = (cand["dt"] - ref_dt).abs()
     return cand.sort_values(["abs_diff"]).iloc[0]
 
+# ---------------- Season / MW helpers ----------------
+def season_start_monday(season_year: int) -> date:
+    aug1 = date(season_year, 8, 1)
+    return aug1 + timedelta(days=(7 - aug1.weekday()) % 7)
+
+def infer_matchweek_from_dates_uk(kickoffs_uk: pd.Series, season_year: int = SEASON_FOR_NAME) -> Optional[int]:
+    dt = pd.to_datetime(kickoffs_uk, errors="coerce")
+    if dt.dt.tz is None:
+        dt = dt.dt.tz_localize("Europe/London")
+    else:
+        dt = dt.dt.tz_convert("Europe/London")
+    dt = dt.dropna()
+    if dt.empty:
+        return None
+    dates = dt.dt.date
+    s0 = season_start_monday(season_year)
+    mws = ((pd.Series(dates).map(lambda d: d - timedelta(days=d.weekday())) - s0)
+           .map(lambda td: td.days // 7) + 1).astype(int)
+    try:
+        return int(mws.mode().iloc[0])
+    except Exception:
+        return None
+
+# ---------------- CLI ----------------
+def parse_args():
+    ap = argparse.ArgumentParser(description="Grade picks via ESPN; window = picks' kickoff range ±2d; NaN-free; grade_status.")
+    ap.add_argument("--mw", type=int, default=None, help="Force MW (1..38) for naming/summary.")
+    ap.add_argument("--infer-mw", action="store_true", help="Infer MW from pick kickoffs (instead of filename or --mw).")
+    ap.add_argument("--out", type=Path, default=None, help=f"Output JSON (default ../data/output/pick_analysis/epl_2025_mwNN_pick_analysis.json)")
+    ap.add_argument("--debug", action="store_true")
+    return ap.parse_args()
+
+# ---------------- Picks I/O ----------------
+def resolve_picks_path(mw: Optional[int], base_dir: Path = DEFAULT_PICKS_DIR) -> Tuple[Path, Optional[int]]:
+    if mw is not None:
+        p = base_dir / f"picks_next_epl_{SEASON_FOR_NAME}_mw{mw:02d}.json"
+        if not p.exists(): raise FileNotFoundError(f"Picks not found: {p}")
+        return p, mw
+    files = sorted(base_dir.glob(f"picks_next_epl_{SEASON_FOR_NAME}_mw*.json"), key=lambda x: x.stat().st_mtime, reverse=True)
+    if not files: raise FileNotFoundError(f"No picks JSONs in {base_dir} for {SEASON_FOR_NAME}")
+    rx = re.compile(rf"picks_next_epl_{SEASON_FOR_NAME}_mw(\d{{2}})\.json$", re.I)
+    for p in files:
+        m = rx.search(p.name)
+        if m: return p, int(m.group(1))
+    return files[0], None
+
+def load_picks_json(p: Path) -> dict:
+    with open(p, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+# ---------------- ESPN (public) ----------------
 def _to_uk_aware(x) -> pd.Timestamp:
     t = pd.to_datetime(x, errors="coerce")
-    if t.tzinfo is None:
-        return t.tz_localize("Europe/London")
+    if t is None or pd.isna(t): return t
+    if t.tzinfo is None: return t.tz_localize("Europe/London")
     return t.tz_convert("Europe/London")
 
-# ---------- ESPN public scoreboard (no key) ----------
 def fetch_espn_results(date_from, date_to, debug: bool=False) -> pd.DataFrame:
-    """
-    Fetch Premier League **completed** results from ESPN public scoreboard (no API key).
-    Endpoint:
-      https://site.api.espn.com/apis/site/v2/sports/soccer/eng.1/scoreboard?dates=YYYYMMDD
-    """
     import requests
     base = "https://site.api.espn.com/apis/site/v2/sports/soccer/eng.1/scoreboard"
     rows = []
@@ -152,51 +151,40 @@ def fetch_espn_results(date_from, date_to, debug: bool=False) -> pd.DataFrame:
         for q in ({"dates": day_str}, {"dates": f"{day_str[:4]}-{day_str[4:6]}-{day_str[6:]}"}):
             try:
                 r = requests.get(base, params=q, timeout=30)
-                if r.status_code == 404:
-                    continue
+                if r.status_code == 404: continue
                 r.raise_for_status()
                 return r.json()
             except Exception as e:
-                if debug:
-                    print(f"[warn] ESPN fetch failed for {q['dates']}: {e}")
+                if debug: print(f"[warn] ESPN fetch failed for {q['dates']}: {e}")
         return None
 
     dmin = _to_uk_aware(date_from); dmax = _to_uk_aware(date_to)
+    if pd.isna(dmin) or pd.isna(dmax): return pd.DataFrame()
     if dmin > dmax: dmin, dmax = dmax, dmin
 
     for day in pd.date_range(dmin.date(), dmax.date(), freq="D"):
         datestr = day.strftime("%Y%m%d")
         data = _fetch_day(datestr)
-        if not data:
-            continue
-
+        if not data: continue
         events = data.get("events", []) or []
         for ev in events:
             comps = ev.get("competitions", []) or []
             comp = comps[0] if comps else {}
             status = (comp.get("status") or {}).get("type") or {}
-            if not status.get("completed", False):
-                continue
+            if not status.get("completed", False): continue
 
             competitors = comp.get("competitors", []) or []
-            home_name = away_name = None
-            home_score = away_score = None
+            home_name = away_name = None; home_score = away_score = None
             for c in competitors:
                 t = (c.get("team") or {})
                 name = t.get("name") or t.get("shortDisplayName") or t.get("displayName")
                 score = c.get("score")
-                if c.get("homeAway") == "home":
-                    home_name, home_score = name, score
-                elif c.get("homeAway") == "away":
-                    away_name, away_score = name, score
+                if c.get("homeAway") == "home": home_name, home_score = name, score
+                elif c.get("homeAway") == "away": away_name, away_score = name, score
+            if home_name is None or away_name is None: continue
 
-            if home_name is None or away_name is None:
-                continue
-            try:
-                hg = int(home_score); ag = int(away_score)
-            except Exception:
-                continue
-
+            try: hg = int(home_score); ag = int(away_score)
+            except Exception: continue
             ko = pd.to_datetime(ev.get("date") or comp.get("date"), utc=True, errors="coerce")
             rows.append({
                 "home_team": home_name, "away_team": away_name,
@@ -205,19 +193,13 @@ def fetch_espn_results(date_from, date_to, debug: bool=False) -> pd.DataFrame:
                 "kickoff_utc": ko,
                 "kickoff_uk": ko.tz_convert("Europe/London") if ko is not None else pd.NaT,
                 "kick_date_uk": (ko.tz_convert("Europe/London").date() if ko is not None else None),
-                "matchweek": None,  # ESPN doesn't publish MW
             })
+    return pd.DataFrame(rows)
 
-    out = pd.DataFrame(rows)
-    if debug:
-        print(f"[debug] ESPN: {'no rows' if out.empty else f'{len(out)} rows'}")
-    return out
-
-# ---------- Market grading ----------
+# ---------------- Market grading ----------------
 def label_from_score(hg: int, ag: int) -> dict:
     res_1x2 = "H" if hg > ag else "A" if ag > hg else "D"
-    total = hg + ag
-    return {"res_1x2": res_1x2, "btts_yes": (hg > 0 and ag > 0), "total": total}
+    return {"res_1x2": res_1x2, "btts_yes": (hg > 0 and ag > 0), "total": hg+ag}
 
 def _normalize_selection_1x2(sel: Optional[str]) -> Optional[str]:
     if sel is None: return None
@@ -233,8 +215,7 @@ def _normalize_selection_btts(sel: Optional[str]) -> Optional[bool]:
     m = {"yes": True, "y": True, "1": True, "both":"yes",
          "no": False, "n": False, "0": False}
     v = m.get(s, None)
-    if v == "yes": return True
-    return v
+    return True if v == "yes" else v
 
 def _parse_totals_market(market: str) -> Optional[float]:
     if not market: return None
@@ -246,106 +227,96 @@ def grade_single(pick: dict, final_labels: dict) -> dict:
     won = None
     market = (pick.get("market") or "").strip()
     sel    = pick.get("selection")
-
-    hg_raw = final_labels.get("home_goals")
-    ag_raw = final_labels.get("away_goals")
+    hg_raw = final_labels.get("home_goals"); ag_raw = final_labels.get("away_goals")
     if hg_raw is not None and ag_raw is not None and not (pd.isna(hg_raw) or pd.isna(ag_raw)):
         hg = int(hg_raw); ag = int(ag_raw)
         labs = label_from_score(hg, ag)
-        if market.upper() in ("1X2","MATCH_ODDS"):
+        MU = market.upper()
+        if MU in ("1X2","MATCH_ODDS"):
             sel_norm = _normalize_selection_1x2(sel)
-            if sel_norm is not None:
-                won = (sel_norm == labs["res_1x2"]) 
-        elif "BTTS" in market.upper():
+            if sel_norm is not None: won = (sel_norm == labs["res_1x2"])
+        elif "BTTS" in MU:
             want_yes = _normalize_selection_btts(sel)
-            if want_yes is not None:
-                won = (want_yes == labs["btts_yes"]) 
-        elif "TOTAL" in market.upper():
+            if want_yes is not None: won = (want_yes == labs["btts_yes"])
+        elif "TOTAL" in MU:
             line = _parse_totals_market(market)
             if line is not None and sel:
                 s = str(sel).strip().lower()
-                if s.startswith("under"):
-                    won = ((hg + ag) < line)
-                elif s.startswith("over"):
-                    won = ((hg + ag) > line)
+                if s.startswith("under"): won = ((hg + ag) < line)
+                elif s.startswith("over"): won = ((hg + ag) > line)
 
-    profit = (float(pick.get("best_odds") or 0.0) - 1.0) if won else (-1.0 if won is False else None)
+    try: odds = float(pick.get("best_odds") or pick.get("odds") or 0.0)
+    except Exception: odds = 0.0
+    profit = (odds - 1.0) if won else (-1.0 if won is False else None)
     return {**pick, **final_labels, **labs, "won": won, "profit": profit}
 
-# ---------- Main ----------
+# ---------------- Main ----------------
 def main():
+    pd.options.mode.copy_on_write = True
     args = parse_args()
 
-    # Picks path based on fixed 2025 scheme
-    picks_path = resolve_fixed_2025_picks_path(args.mw)
+    now_uk = pd.Timestamp.now(tz="Europe/London")
+    now_utc = now_uk.tz_convert("UTC")
 
-    # Load picks
+    # Resolve picks and MW label for naming only
+    picks_path, mw_from_name = resolve_picks_path(args.mw)
     picks = load_picks_json(picks_path)
+
     singles = picks.get("singles") or picks.get("picks") or []
     accas   = picks.get("accas") or []
-
-    # Build picks table
     s = pd.DataFrame(singles)
     if s.empty:
-        print("[warn] No singles in picks JSON; accas may still be graded.")
         s = pd.DataFrame(columns=["home_team","away_team","kickoff_uk","kickoff_utc","market","selection","best_odds","model_prob"])
+
+    # Datetimes + keys
     s["home_key"] = s.get("home_team", pd.Series(dtype="object")).map(canon_team)
     s["away_key"] = s.get("away_team", pd.Series(dtype="object")).map(canon_team)
-    uk  = s["kickoff_uk"] if "kickoff_uk" in s.columns else pd.Series([pd.NA]*len(s))
-    utc = s["kickoff_utc"] if "kickoff_utc" in s.columns else pd.Series([pd.NA]*len(s))
-    kick_raw = uk.fillna(utc)
+    # Prefer UK time if present, else UTC
+    kick_raw = (s["kickoff_uk"] if "kickoff_uk" in s.columns else pd.Series([pd.NA]*len(s))).fillna(
+               s["kickoff_utc"] if "kickoff_utc" in s.columns else pd.Series([pd.NA]*len(s)))
     s["kickoff_uk_dt"] = pd.to_datetime(kick_raw, utc=True, errors="coerce").dt.tz_convert("Europe/London")
     s["kick_date_uk"]  = s["kickoff_uk_dt"].dt.date
 
-    # Date window for ESPN fetch
+    # Matchweek label (for naming/summary): --infer-mw beats --mw beats filename
+    if args.infer_mw:
+        mw_label = infer_matchweek_from_dates_uk(s["kickoff_uk_dt"]) or mw_from_name
+    else:
+        mw_label = args.mw if args.mw is not None else mw_from_name
+
+    # ESPN FETCH WINDOW = picks' kickoff min..max ±2 days (avoids MW/window mismatches)
     if s["kickoff_uk_dt"].notna().any():
         dmin = s["kickoff_uk_dt"].min() - pd.Timedelta(days=2)
         dmax = s["kickoff_uk_dt"].max() + pd.Timedelta(days=2)
     else:
-        now = pd.Timestamp.now(tz="Europe/London")
-        dmin, dmax = now - pd.Timedelta(days=7), now + pd.Timedelta(days=7)
+        # fallback: ±7d around now
+        dmin, dmax = now_uk - pd.Timedelta(days=7), now_uk + pd.Timedelta(days=7)
 
-    # ESPN ONLY
     espn_df = fetch_espn_results(dmin, dmax, debug=args.debug)
-    if args.debug:
-        print(f"[debug] ESPN: {'no rows' if espn_df.empty else f'{len(espn_df)} rows'}")
 
-    sources: List[Tuple[str, pd.DataFrame]] = [("ESPN", espn_df)]
-
-    # Working join frame
+    # Join picks -> results
     j = s.copy()
-    for col in ["home_goals","away_goals","kickoff_uk_res","matchweek"]:
-        if col not in j.columns:
-            j[col] = pd.NA
+    for col in ["home_goals","away_goals","kickoff_uk_res"]:
+        if col not in j.columns: j[col] = pd.NA
 
-    # Matching passes
-    for src_name, src_df in sources:
-        if src_df is None or src_df.empty:
-            continue
-        src = src_df.copy()
+    if espn_df is not None and not espn_df.empty:
+        src = espn_df.copy()
         src["kick_date_uk"] = pd.to_datetime(src["kick_date_uk"], errors="coerce").dt.date
         src["pair_key"] = src.apply(lambda r: _build_pair_key(r.get("home_key"), r.get("away_key")), axis=1)
-
-        before = j["home_goals"].notna().sum()
 
         # Pass 1: exact (home, away, date)
         mask = j["home_goals"].isna()
         if mask.any():
             left = j.loc[mask, ["home_key","away_key","kick_date_uk"]].copy()
             left["__idx"] = left.index
-            cols = ["home_key","away_key","kick_date_uk","home_goals","away_goals","kickoff_uk"]
-            if "matchweek" in src.columns: cols.append("matchweek")
-            right = src[cols].copy()
+            right = src[["home_key","away_key","kick_date_uk","home_goals","away_goals","kickoff_uk"]].copy()
             m1 = left.merge(right, on=["home_key","away_key","kick_date_uk"], how="left").set_index("__idx")
-            fill_idx = m1.index
-            if len(fill_idx):
-                j.loc[fill_idx, "home_goals"] = j.loc[fill_idx, "home_goals"].combine_first(m1["home_goals"])
-                j.loc[fill_idx, "away_goals"] = j.loc[fill_idx, "away_goals"].combine_first(m1["away_goals"])
-                j.loc[fill_idx, "kickoff_uk_res"] = j.loc[fill_idx, "kickoff_uk_res"].combine_first(m1["kickoff_uk"])
-                if "matchweek" in m1.columns:
-                    j.loc[fill_idx, "matchweek"] = j.loc[fill_idx, "matchweek"].fillna(m1["matchweek"])
+            idxs = m1.index
+            if len(idxs):
+                j.loc[idxs, "home_goals"] = j.loc[idxs, "home_goals"].combine_first(m1["home_goals"])
+                j.loc[idxs, "away_goals"] = j.loc[idxs, "away_goals"].combine_first(m1["away_goals"])
+                j.loc[idxs, "kickoff_uk_res"] = j.loc[idxs, "kickoff_uk_res"].combine_first(m1["kickoff_uk"])
 
-        # Pass 2: swapped (handle potential inversions)
+        # Pass 2: swapped
         mask = j["home_goals"].isna()
         if mask.any():
             sw = src.rename(columns={
@@ -355,19 +326,15 @@ def main():
             })
             left = j.loc[mask, ["home_key","away_key","kick_date_uk"]].copy()
             left["__idx"] = left.index
-            cols = ["home_key","away_key","kick_date_uk","home_goals","away_goals","kickoff_uk"]
-            if "matchweek" in sw.columns: cols.append("matchweek")
-            right = sw[cols].copy()
+            right = sw[["home_key","away_key","kick_date_uk","home_goals","away_goals","kickoff_uk"]].copy()
             m2 = left.merge(right, on=["home_key","away_key","kick_date_uk"], how="left").set_index("__idx")
-            fill_idx = m2.index
-            if len(fill_idx):
-                j.loc[fill_idx, "home_goals"] = j.loc[fill_idx, "home_goals"].combine_first(m2["home_goals"])
-                j.loc[fill_idx, "away_goals"] = j.loc[fill_idx, "away_goals"].combine_first(m2["away_goals"])
-                j.loc[fill_idx, "kickoff_uk_res"] = j.loc[fill_idx, "kickoff_uk_res"].combine_first(m2["kickoff_uk"])
-                if "matchweek" in m2.columns:
-                    j.loc[fill_idx, "matchweek"] = j.loc[fill_idx, "matchweek"].fillna(m2["matchweek"])
+            idxs = m2.index
+            if len(idxs):
+                j.loc[idxs, "home_goals"] = j.loc[idxs, "home_goals"].combine_first(m2["home_goals"])
+                j.loc[idxs, "away_goals"] = j.loc[idxs, "away_goals"].combine_first(m2["away_goals"])
+                j.loc[idxs, "kickoff_uk_res"] = j.loc[idxs, "kickoff_uk_res"].combine_first(m2["kickoff_uk"])
 
-        # Pass 3: unordered ±2 days, nearest kickoff
+        # Pass 3: unordered pair within ±2d, nearest KO
         mask_idx = j.index[j["home_goals"].isna()]
         if len(mask_idx):
             src_tmp = src.copy()
@@ -391,10 +358,8 @@ def main():
                     j.at[idx, "home_goals"] = best.get("away_goals")
                     j.at[idx, "away_goals"] = best.get("home_goals")
                 j.at[idx, "kickoff_uk_res"] = best.get("kickoff_uk")
-                if "matchweek" in best.index:
-                    j.at[idx, "matchweek"] = j.at[idx, "matchweek"] if pd.notna(j.at[idx, "matchweek"]) else best.get("matchweek")
 
-        # Pass 4: fuzzy titles within ±2 days, nearest kickoff
+        # Pass 4: fuzzy within ±2d, nearest KO
         mask_idx = j.index[j["home_goals"].isna()]
         if len(mask_idx):
             src_tmp = src.copy()
@@ -416,8 +381,7 @@ def main():
                 )
                 top = cand.sort_values(["score"], ascending=False).head(5)
                 best = top.iloc[0]
-                if best["score"] < 0.80:
-                    continue
+                if best["score"] < 0.80: continue
                 ref_dt = pd.to_datetime(j.at[idx, "kickoff_uk"] or j.at[idx, "kickoff_uk_dt"], errors="coerce")
                 if pd.isna(ref_dt): ref_dt = d_ts
                 top["dt"] = pd.to_datetime(top["kickoff_uk"], errors="coerce")
@@ -430,55 +394,37 @@ def main():
                     j.at[idx, "home_goals"] = best.get("away_goals")
                     j.at[idx, "away_goals"] = best.get("home_goals")
                 j.at[idx, "kickoff_uk_res"] = best.get("kickoff_uk")
-                if "matchweek" in best.index:
-                    j.at[idx, "matchweek"] = j.at[idx, "matchweek"] if pd.notna(j.at[idx, "matchweek"]) else best.get("matchweek")
 
-        after = j["home_goals"].notna().sum()
-        if args.debug:
-            print(f"[debug] {src_name}: matched +{after - before}, now matched {after}/{len(j)}")
-        if after == len(j):
-            break  # all done
-
-    # Build final labels (attach the CLI MW for traceability)
+    # Build labels with MW label for summary
     finals = []
     for _, r in j.iterrows():
         hg = r.get("home_goals"); ag = r.get("away_goals")
         finals.append({
             "home_goals": int(hg) if pd.notna(hg) else None,
             "away_goals": int(ag) if pd.notna(ag) else None,
-            "matchweek": int(args.mw),   # propagate requested MW (ESPN doesn't provide one)
+            "matchweek": int(mw_label) if mw_label is not None else None,
         })
     j_final = pd.DataFrame(finals, index=j.index).astype(object)
 
-    # Debug CSV of unmatched (always write something in --debug)
-    if args.debug:
-        unmatched_idx = j_final.index[j_final["home_goals"].isna()].tolist()
-        rows = []
-        if len(unmatched_idx):
-            for idx in unmatched_idx:
-                rows.append({
-                    "pick_home": s.at[idx, "home_team"] if "home_team" in s.columns else None,
-                    "pick_away": s.at[idx, "away_team"] if "away_team" in s.columns else None,
-                    "pick_date": s.at[idx, "kick_date_uk"] if "kick_date_uk" in s.columns else None,
-                    "reason": "no result matched"
-                })
-        dbg = pd.DataFrame(rows)
-        out_dbg = (DEFAULT_OUT_DIR / "debug_unmatched.csv")
-        out_dbg.parent.mkdir(parents=True, exist_ok=True)
-        dbg.to_csv(out_dbg, index=False)
-        print(f"[debug] wrote {out_dbg} ({len(dbg)} rows)")
-
-    # Grade singles
+    # Grade singles + grade_status
     graded_singles = []
     for idx in j_final.index:
-        pick = s.loc[idx].to_dict()
+        pick = j.loc[idx].to_dict()
         fin  = j_final.loc[idx].to_dict()
-        graded_singles.append(grade_single(pick, fin))
+        row  = grade_single(pick, fin)
+        ko = pd.to_datetime(row.get("kickoff_uk") or row.get("kickoff_utc"), utc=True, errors="coerce")
+        ko_uk = ko.tz_convert("Europe/London") if ko is not None and not pd.isna(ko) else None
+        if row["won"] is not None:
+            status = "graded"
+        else:
+            status = "pending_result" if (ko_uk is None or ko_uk > now_uk) else "no_match"
+        row["grade_status"] = status
+        graded_singles.append(row)
 
-    # Grade accas
+    # Grade accas (status = graded if all legs graded; else pending_result)
     singles_by_key = {(d.get("home_team"), d.get("away_team"), d.get("kickoff_uk")): d for d in graded_singles}
     graded_accas = []
-    for a in (picks.get("accas") or []):
+    for a in accas:
         legs = a.get("legs", [])
         glegs = []
         any_unknown = False
@@ -489,15 +435,18 @@ def main():
             key = (l.get("home_team"), l.get("away_team"), l.get("kickoff_uk"))
             gs = singles_by_key.get(key)
             if gs is None:
+                # fallback: canonical names + kickoff
                 key2_h = canon_team(l.get("home_team")); key2_a = canon_team(l.get("away_team"))
                 for ss in graded_singles:
                     if canon_team(ss.get("home_team")) == key2_h and canon_team(ss.get("away_team")) == key2_a and ss.get("kickoff_uk") == l.get("kickoff_uk"):
                         gs = ss; break
             if gs is None or gs.get("won") is None:
                 any_unknown = True
+                glegs.append({**l, "won": None, "grade_status": (gs or {}).get("grade_status", "pending_result")})
             else:
                 all_win = all_win and bool(gs["won"])
-            glegs.append(gs if gs is not None else {**l, "won": None})
+                glegs.append(gs)
+
             try: prod_odds *= float((gs or l).get("best_odds") or (gs or l).get("odds") or 0.0)
             except Exception: pass
             try:
@@ -517,36 +466,37 @@ def main():
             "won": acca_won,
             "return": acca_return,
             "profit": acca_profit,
+            "grade_status": ("graded" if acca_won is not None else "pending_result")
         })
 
-    # -------- Summaries --------
+    # Summaries
     gs_df = pd.DataFrame(graded_singles)
     graded_mask_s = gs_df["won"].notna() if "won" in gs_df else pd.Series([], dtype="boolean")
     n_s_total = len(gs_df)
     gs_df_g = gs_df.loc[graded_mask_s] if n_s_total else gs_df
-    n_s = len(gs_df_g)
-    n_sw = int(gs_df_g["won"].sum()) if n_s else 0
+    n_s = len(gs_df_g); n_sw = int(gs_df_g["won"].sum()) if n_s else 0
     pnl_s = float(pd.to_numeric(gs_df_g["profit"], errors="coerce").fillna(0).sum()) if n_s else 0.0
-    roi_s = pnl_s / n_s if n_s else None
-    hit_s = (n_sw / n_s) if n_s else None
+    roi_s = (pnl_s / n_s) if n_s else None; hit_s = (n_sw / n_s) if n_s else None
 
     ga_df_all = pd.DataFrame(graded_accas)
     graded_mask_a = ga_df_all["won"].notna() if not ga_df_all.empty else pd.Series([], dtype="boolean")
     ga_df = ga_df_all.loc[graded_mask_a] if not ga_df_all.empty else ga_df_all
     n_a = len(ga_df); n_aw = int(ga_df["won"].sum()) if n_a else 0
     pnl_a = float(pd.to_numeric(ga_df["profit"], errors="coerce").fillna(0).sum()) if n_a else 0.0
-    roi_a = pnl_a / n_a if n_a else None
-    hit_a = (n_aw / n_a) if n_a else None
+    roi_a = (pnl_a / n_a) if n_a else None; hit_a = (n_aw / n_a) if n_a else None
 
-    # ---------- Output path ----------
-    if args.out is not None:
-        out_path = args.out
-    else:
-        out_path = DEFAULT_OUT_DIR / f"epl_{SEASON_FOR_NAME}_mw{args.mw:02d}_pick_analysis.json"
-    out_path.parent.mkdir(parents=True, exist_ok=True)
+    # Output path & header
+    out_dir = DEFAULT_OUT_DIR; out_dir.mkdir(parents=True, exist_ok=True)
+    mw_for_name = int(mw_label) if mw_label is not None else (int(mw_from_name) if mw_from_name is not None else 0)
+    out_path = args.out if args.out else out_dir / f"epl_{SEASON_FOR_NAME}_mw{mw_for_name:02d}_pick_analysis.json"
 
-    # ---------- Write payload ----------
     payload = {
+        "generated_at_uk": now_uk.isoformat(),
+        "generated_at_utc": now_utc.isoformat(),
+        "espn_fetch_window_uk": {
+            "from": dmin.isoformat() if isinstance(dmin, pd.Timestamp) else None,
+            "to":   dmax.isoformat() if isinstance(dmax, pd.Timestamp) else None,
+        },
         "source": {
             "picks": str(picks_path),
             "espn": {"enabled": True},
@@ -557,31 +507,34 @@ def main():
                 "count_graded": n_s,
                 "wins": n_sw,
                 "hit_rate": hit_s,
-                "profit (Total £s won or lost)": pnl_s,
-                "roi_per_bet (average profit per wager)": roi_s
+                "profit_total": pnl_s,
+                "roi_per_bet": roi_s
             },
             "accas":   {
                 "count_total": len(ga_df_all),
                 "count_graded": n_a,
                 "wins": n_aw,
                 "hit_rate": hit_a,
-                "profit (Total £s won or lost)": pnl_a,
-                "roi_per_bet (average profit per wager)": roi_a
+                "profit_total": pnl_a,
+                "roi_per_bet": roi_a
             },
-            "matchweek": int(args.mw),
+            "matchweek": int(mw_label) if mw_label is not None else None,
+            "matchweek_from_filename": int(mw_from_name) if mw_from_name is not None else None
         },
         "singles": graded_singles,
         "accas": graded_accas,
     }
-    with open(out_path, "w", encoding="utf-8") as f:
-        json.dump(payload, f, indent=2, ensure_ascii=False, default=_json_default)
+    payload = _sanitize(payload)
 
-    unmatched = int((pd.Series([d.get("won") for d in graded_singles]).isna()).sum())
-    print(f"[done] MW={args.mw:02d} | singles total={n_s_total} graded={n_s} (wins={n_sw}, unmatched={unmatched}), "
+    with open(out_path, "w", encoding="utf-8") as f:
+        json.dump(payload, f, indent=2, ensure_ascii=False, default=_json_default, allow_nan=False)
+
+    # Console summary
+    unmatched = int((pd.Series([d.get("won") for d in payload["singles"]]).isna()).sum())
+    print(f"[done] MW(label)={mw_label} | singles total={n_s_total} graded={n_s} (wins={n_sw}, unmatched={unmatched}), "
           f"accas total={len(ga_df_all)} graded={n_a} (wins={n_aw}) → {out_path}")
     if n_s:
-        print(f"Singles ROI: {roi_s:+.3f}  |  Accas ROI: {roi_a:+.3f}" if n_a else f"Singles ROI: {roi_s:+.3f}")
+        print(f"Singles ROI: {roi_s:+.3f}" + (f"  |  Accas ROI: {roi_a:+.3f}" if n_a else ""))
 
 if __name__ == "__main__":
-    pd.options.mode.copy_on_write = True
     main()

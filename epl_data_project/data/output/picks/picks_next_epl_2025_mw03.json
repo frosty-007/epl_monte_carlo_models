@@ -1,15 +1,15 @@
 {
-  "generated_at_utc": "2025-08-28T22:27:24.515271+00:00",
+  "generated_at_utc": "2025-09-07T20:54:56.312080+00:00",
   "window_uk": {
-    "start": "2025-08-28T00:00:00+01:00",
-    "end": "2025-09-05T00:00:00+01:00"
+    "start": "2025-09-07T00:00:00+01:00",
+    "end": "2025-09-15T00:00:00+01:00"
   },
   "epl_matchweek": {
     "season": 2025,
-    "mw_mode": 4,
+    "mw_mode": 3,
     "mw_range": [
-      4,
-      4
+      3,
+      3
     ]
   },
   "singles_count": 10,
@@ -23,13 +23,13 @@
       "kickoff_uk": "2025-08-30T12:30:00+01:00",
       "market": "1X2",
       "selection": "Away",
-      "model_prob": 0.5766895062403021,
+      "model_prob": 0.5766895837140731,
       "market_imp_prob": 0.15594943088747953,
-      "edge": 0.4207400753528226,
-      "kelly": 0.49829867406258027,
+      "edge": 0.42074015282659355,
+      "kelly": 0.49829876588334593,
       "best_odds": 6.4,
       "best_bookmaker": "Matchbook",
-      "score": 2.6908128399379336
+      "score": 2.690813335770068
     },
     {
       "match_id": "9ef82f2fd00581a60f365e2b7661d820",
@@ -39,13 +39,13 @@
       "kickoff_uk": "2025-08-30T15:00:00+01:00",
       "market": "1X2",
       "selection": "Away",
-      "model_prob": 0.47157051614118767,
+      "model_prob": 0.47157049669186707,
       "market_imp_prob": 0.2134242265338228,
-      "edge": 0.25814628960736485,
-      "kelly": 0.33251012565202653,
+      "edge": 0.25814627015804426,
+      "kelly": 0.33251010108446366,
       "best_odds": 4.8,
       "best_bookmaker": "Matchbook",
-      "score": 1.2635384774777005
+      "score": 1.2635383841209618
     },
     {
       "match_id": "20f9ed064f5cb30e97668aead56ad1b8",
@@ -55,13 +55,13 @@
       "kickoff_uk": "2025-08-31T14:00:00+01:00",
       "market": "1X2",
       "selection": "Home",
-      "model_prob": 0.5049549099749042,
+      "model_prob": 0.5049547186852595,
       "market_imp_prob": 0.22721008649758095,
-      "edge": 0.27774482347732327,
-      "kelly": 0.3593534129086996,
+      "edge": 0.2777446321876786,
+      "kelly": 0.3593531653573947,
       "best_odds": 4.4,
       "best_bookmaker": "Smarkets",
-      "score": 1.221801603889579
+      "score": 1.221800762215142
     },
     {
       "match_id": "747d1b012457b5182b41542e943113f8",
@@ -71,13 +71,13 @@
       "kickoff_uk": "2025-08-31T14:00:00+01:00",
       "market": "1X2",
       "selection": "Away",
-      "model_prob": 0.3664850604917382,
+      "model_prob": 0.36648493466337656,
       "market_imp_prob": 0.1863801568577441,
-      "edge": 0.1801049036339941,
-      "kelly": 0.22570396282323557,
+      "edge": 0.18010477780563247,
+      "kelly": 0.2257038090330158,
       "best_odds": 5.5,
       "best_bookmaker": "Matchbook",
-      "score": 1.01566783270456
+      "score": 1.015667140648571
     },
     {
       "match_id": "f46cb7d04857688a972ce1880de9dadb",
@@ -87,13 +87,13 @@
       "kickoff_uk": "2025-08-31T19:00:00+01:00",
       "market": "1X2",
       "selection": "Away",
-      "model_prob": 0.4287303571473455,
+      "model_prob": 0.42873036940208586,
       "market_imp_prob": 0.22470004397261137,
-      "edge": 0.2040303131747341,
-      "kelly": 0.2607098739553883,
+      "edge": 0.2040303254294745,
+      "kelly": 0.2607098898144641,
       "best_odds": 4.4,
       "best_bookmaker": "Betfair",
-      "score": 0.8864135714483203
+      "score": 0.8864136253691779
     },
     {
       "match_id": "d0f07775865352e055d4deca55e0e56c",
@@ -103,13 +103,13 @@
       "kickoff_uk": "2025-08-31T16:30:00+01:00",
       "market": "1X2",
       "selection": "Away",
-      "model_prob": 0.4525768557066204,
+      "model_prob": 0.4525764554510794,
       "market_imp_prob": 0.2952397931895168,
-      "edge": 0.15733706251710355,
-      "kelly": 0.21963083685837373,
+      "edge": 0.15733666226156257,
+      "kelly": 0.21963026628132598,
       "best_odds": 3.35,
       "best_bookmaker": "Betfair",
-      "score": 0.5161324666171783
+      "score": 0.5161311257611161
     },
     {
       "match_id": "20f9ed064f5cb30e97668aead56ad1b8",
@@ -119,13 +119,13 @@
       "kickoff_uk": "2025-08-31T14:00:00+01:00",
       "market": "Totals 2.5",
       "selection": "Under 2.5",
-      "model_prob": 0.5747705929491806,
+      "model_prob": 0.5747705776570364,
       "market_imp_prob": 0.39613526570048313,
-      "edge": 0.17863532724869752,
-      "kelly": 0.29128432158196776,
+      "edge": 0.1786353119565533,
+      "kelly": 0.29128429609506074,
       "best_odds": 2.5,
       "best_bookmaker": "Matchbook",
-      "score": 0.4369264823729515
+      "score": 0.4369264441425911
     },
     {
       "match_id": "20f9ed064f5cb30e97668aead56ad1b8",
@@ -135,13 +135,13 @@
       "kickoff_uk": "2025-08-31T14:00:00+01:00",
       "market": "BTTS",
       "selection": "No",
-      "model_prob": 0.5429822019104616,
+      "model_prob": 0.5429821204023548,
       "market_imp_prob": 0.39659367396593675,
-      "edge": 0.1463885279445249,
-      "kelly": 0.23418639239050332,
+      "edge": 0.14638844643641807,
+      "kelly": 0.2341862558093513,
       "best_odds": 2.48,
       "best_bookmaker": "Matchbook",
-      "score": 0.3465958607379449
+      "score": 0.34659565859784003
     },
     {
       "match_id": "9ef82f2fd00581a60f365e2b7661d820",
@@ -151,13 +151,13 @@
       "kickoff_uk": "2025-08-30T15:00:00+01:00",
       "market": "Totals 2.5",
       "selection": "Under 2.5",
-      "model_prob": 0.5452160312398229,
+      "model_prob": 0.5452160096028607,
       "market_imp_prob": 0.3893129770992367,
-      "edge": 0.1559030541405862,
-      "kelly": 0.22037033926826774,
+      "edge": 0.15590303250362397,
+      "kelly": 0.22037030217633252,
       "best_odds": 2.4,
       "best_bookmaker": "William Hill",
-      "score": 0.30851847497557494
+      "score": 0.3085184230468656
     },
     {
       "match_id": "9ef82f2fd00581a60f365e2b7661d820",
@@ -167,21 +167,21 @@
       "kickoff_uk": "2025-08-30T15:00:00+01:00",
       "market": "BTTS",
       "selection": "No",
-      "model_prob": 0.5073914614502719,
+      "model_prob": 0.5073914381144049,
       "market_imp_prob": 0.38755980861244016,
-      "edge": 0.11983165283783176,
-      "kelly": 0.19161675725172828,
+      "edge": 0.11983162950196474,
+      "kelly": 0.19161671895697216,
       "best_odds": 2.56,
       "best_bookmaker": "Matchbook",
-      "score": 0.2989221413126961
+      "score": 0.2989220815728766
     }
   ],
   "accas": [
     {
       "legs_count": 4,
-      "acca_prob": 0.05032659732338798,
+      "acca_prob": 0.050326565664691514,
       "acca_odds": 743.4240000000001,
-      "score": 36.41400028854239,
+      "score": 36.413976752707626,
       "legs": [
         {
           "home_team": "Brighton and Hove Albion",
@@ -190,7 +190,7 @@
           "market": "1X2",
           "selection": "Home",
           "odds": 4.4,
-          "p": 0.5049549099749042,
+          "p": 0.5049547186852595,
           "bookmaker": "Smarkets"
         },
         {
@@ -200,7 +200,7 @@
           "market": "1X2",
           "selection": "Away",
           "odds": 5.5,
-          "p": 0.3664850604917382,
+          "p": 0.36648493466337656,
           "bookmaker": "Matchbook"
         },
         {
@@ -210,7 +210,7 @@
           "market": "1X2",
           "selection": "Away",
           "odds": 4.8,
-          "p": 0.47157051614118767,
+          "p": 0.47157049669186707,
           "bookmaker": "Matchbook"
         },
         {
@@ -220,16 +220,16 @@
           "market": "1X2",
           "selection": "Away",
           "odds": 6.4,
-          "p": 0.5766895062403021,
+          "p": 0.5766895837140731,
           "bookmaker": "Matchbook"
         }
       ]
     },
     {
       "legs_count": 4,
-      "acca_prob": 0.058874269023452254,
+      "acca_prob": 0.058874253884351295,
       "acca_odds": 594.7392000000001,
-      "score": 34.014835659592784,
+      "score": 34.014826655775984,
       "legs": [
         {
           "home_team": "Brighton and Hove Albion",
@@ -238,7 +238,7 @@
           "market": "1X2",
           "selection": "Home",
           "odds": 4.4,
-          "p": 0.5049549099749042,
+          "p": 0.5049547186852595,
           "bookmaker": "Smarkets"
         },
         {
@@ -248,7 +248,7 @@
           "market": "1X2",
           "selection": "Away",
           "odds": 4.8,
-          "p": 0.47157051614118767,
+          "p": 0.47157049669186707,
           "bookmaker": "Matchbook"
         },
         {
@@ -258,7 +258,7 @@
           "market": "1X2",
           "selection": "Away",
           "odds": 6.4,
-          "p": 0.5766895062403021,
+          "p": 0.5766895837140731,
           "bookmaker": "Matchbook"
         },
         {
@@ -268,16 +268,16 @@
           "market": "1X2",
           "selection": "Away",
           "odds": 4.4,
-          "p": 0.4287303571473455,
+          "p": 0.42873036940208586,
           "bookmaker": "Betfair"
         }
       ]
     },
     {
       "legs_count": 4,
-      "acca_prob": 0.04272963707896038,
+      "acca_prob": 0.04272962760767915,
       "acca_odds": 743.4240000000001,
-      "score": 30.766237715789046,
+      "score": 30.76623067461127,
       "legs": [
         {
           "home_team": "Nottingham Forest",
@@ -286,7 +286,7 @@
           "market": "1X2",
           "selection": "Away",
           "odds": 5.5,
-          "p": 0.3664850604917382,
+          "p": 0.36648493466337656,
           "bookmaker": "Matchbook"
         },
         {
@@ -296,7 +296,7 @@
           "market": "1X2",
           "selection": "Away",
           "odds": 4.8,
-          "p": 0.47157051614118767,
+          "p": 0.47157049669186707,
           "bookmaker": "Matchbook"
         },
         {
@@ -306,7 +306,7 @@
           "market": "1X2",
           "selection": "Away",
           "odds": 6.4,
-          "p": 0.5766895062403021,
+          "p": 0.5766895837140731,
           "bookmaker": "Matchbook"
         },
         {
@@ -316,16 +316,16 @@
           "market": "1X2",
           "selection": "Away",
           "odds": 4.4,
-          "p": 0.4287303571473455,
+          "p": 0.42873036940208586,
           "bookmaker": "Betfair"
         }
       ]
     },
     {
       "legs_count": 4,
-      "acca_prob": 0.04575464178936662,
+      "acca_prob": 0.04575461620165781,
       "acca_odds": 681.4720000000002,
-      "score": 30.18050724948326,
+      "score": 30.180489812176162,
       "legs": [
         {
           "home_team": "Brighton and Hove Albion",
@@ -334,7 +334,7 @@
           "market": "1X2",
           "selection": "Home",
           "odds": 4.4,
-          "p": 0.5049549099749042,
+          "p": 0.5049547186852595,
           "bookmaker": "Smarkets"
         },
         {
@@ -344,7 +344,7 @@
           "market": "1X2",
           "selection": "Away",
           "odds": 5.5,
-          "p": 0.3664850604917382,
+          "p": 0.36648493466337656,
           "bookmaker": "Matchbook"
         },
         {
@@ -354,7 +354,7 @@
           "market": "1X2",
           "selection": "Away",
           "odds": 6.4,
-          "p": 0.5766895062403021,
+          "p": 0.5766895837140731,
           "bookmaker": "Matchbook"
         },
         {
@@ -364,16 +364,16 @@
           "market": "1X2",
           "selection": "Away",
           "odds": 4.4,
-          "p": 0.4287303571473455,
+          "p": 0.42873036940208586,
           "bookmaker": "Betfair"
         }
       ]
     },
     {
       "legs_count": 4,
-      "acca_prob": 0.0621489267378898,
+      "acca_prob": 0.06214885401625812,
       "acca_odds": 452.81280000000004,
-      "score": 27.141829533178747,
+      "score": 27.141796603893088,
       "legs": [
         {
           "home_team": "Brighton and Hove Albion",
@@ -382,7 +382,7 @@
           "market": "1X2",
           "selection": "Home",
           "odds": 4.4,
-          "p": 0.5049549099749042,
+          "p": 0.5049547186852595,
           "bookmaker": "Smarkets"
         },
         {
@@ -392,7 +392,7 @@
           "market": "1X2",
           "selection": "Away",
           "odds": 4.8,
-          "p": 0.47157051614118767,
+          "p": 0.47157049669186707,
           "bookmaker": "Matchbook"
         },
         {
@@ -402,7 +402,7 @@
           "market": "1X2",
           "selection": "Away",
           "odds": 6.4,
-          "p": 0.5766895062403021,
+          "p": 0.5766895837140731,
           "bookmaker": "Matchbook"
         },
         {
@@ -412,7 +412,7 @@
           "market": "1X2",
           "selection": "Away",
           "odds": 3.35,
-          "p": 0.4525768557066204,
+          "p": 0.4525764554510794,
           "bookmaker": "Betfair"
         }
       ]
